@@ -26,6 +26,8 @@
     PF: { wing: '全能前锋', slasher: '冲击型大前锋', anchor: '协防型内线', big: '低位终结者', twoway: '双向大前锋', pointbig: '组织型内线' },
     C: { anchor: '禁区守护者', big: '低位巨兽', pointbig: '全能策应中锋' }
   };
+  const POSITION_ORDER = ['PG', 'SG', 'SF', 'PF', 'C'];
+  const POSITION_DECAY_FACTORS = [1, 0.94, 0.86, 0.76, 0.64];
   const ROOKIE_FIRST_NAMES = ['杰伦', '凯登', '马库斯', '德文', '特雷', '以赛亚', '卡梅伦', '安德烈', '科比', '贾马尔', '达里厄斯', '泰勒', '诺阿', '布兰登', '乔丹', '迈尔斯', '奥斯汀', '德里克', '朱利安', '阿伦'];
   const ROOKIE_LAST_NAMES = ['布朗', '约翰逊', '威廉姆斯', '戴维斯', '米切尔', '霍尔', '沃克', '刘易斯', '克拉克', '罗宾逊', '杨', '格林', '怀特', '哈里斯', '马丁', '汤普森', '安德森', '托马斯', '摩尔', '杰克逊', '贝克', '库珀', '里德', '金', '赖特', '斯科特', '亚当斯', '希尔', '卡特', '特纳'];
   const INITIAL_ROOKIES = new Set(['库珀-弗拉格', '康-克尼普尔', 'VJ-埃奇库姆', '迪伦-哈珀', '埃斯-贝利', '特雷-约翰逊', '杰里迈亚-费尔斯', '德里克-奎因', '卡特-布莱恩特']);
@@ -216,7 +218,7 @@
     if (state.eraKey !== 'current') {
       const era = DATA.getEra(state.eraKey);
       app.querySelector('.step-label').textContent = `${era.label.toUpperCase()} · STEP 01 / 03`;
-      app.querySelector('.subtitle').textContent = `${era.seasonLabel} 赛季名单 · 位置只影响最终总评权重`;
+      app.querySelector('.subtitle').textContent = `${era.seasonLabel} 赛季名单 · 属性按最近适配位置计算`;
     }
     const grid = document.getElementById('position-grid');
     Object.entries(DATA.POSITIONS).forEach(([key, pos]) => {
@@ -255,7 +257,7 @@
       const lockedValue = state.attrs[key];
       const source = state.attrSlots[key];
       const previewValue = lockedValue == null && state.selectedPlayer
-        ? state.selectedPlayer[key]
+        ? positionAdjustedAttribute(state.selectedPlayer, key).value
         : null;
       const displayValue = lockedValue != null ? lockedValue : previewValue;
       const sourceName = source
@@ -350,10 +352,11 @@
 
   function playerCardHTML(player, team) {
     const selected = state.selectedPlayer && state.selectedPlayer.name === player.name;
+    const positions = (player.positions || [player.pos]).join(' / ');
     return `
       <button class="player-card${selected ? ' is-selected' : ''}" type="button" data-player="${player.name}">
         <span class="player-avatar" style="--team-color:${team.primary}">${initials(player.name)}</span>
-        <span class="player-meta"><strong>${player.name}</strong><small>${player.pos} · ${player.archetypeLabel}</small></span>
+        <span class="player-meta"><strong>${player.name}</strong><small>${positions} · ${player.archetypeLabel}</small></span>
         <span class="player-ovr"><b>${player.ovr}</b><small>OVR</small></span>
       </button>`;
   }
@@ -435,21 +438,44 @@
     renderAttributeList();
   }
 
+  function positionAdjustedAttribute(player, attributeKey) {
+    const rawValue = player[attributeKey];
+    const eligiblePositions = player.positions || [player.pos];
+    const targetIndex = POSITION_ORDER.indexOf(state.position);
+    const distance = Math.min(...eligiblePositions.map(position => Math.abs(POSITION_ORDER.indexOf(position) - targetIndex)));
+    const factor = attributeKey === 'POT' ? 1 : POSITION_DECAY_FACTORS[distance];
+    return {
+      rawValue,
+      value: clamp(Math.round(rawValue * factor), 40, 99),
+      distance,
+      factor,
+      decayPercent: Math.round((1 - factor) * 100),
+      positions: eligiblePositions
+    };
+  }
+
   function requestLock(attributeKey) {
     const player = state.selectedPlayer;
     if (!player || state.attrs[attributeKey] != null) return;
     const attr = DATA.ATTRS.find(([key]) => key === attributeKey);
-    const value = player[attributeKey];
+    const fit = positionAdjustedAttribute(player, attributeKey);
+    const value = fit.value;
     const team = DATA.getTeam(player.teamId);
+    const positionText = fit.positions.join(' / ');
+    const decayText = attributeKey === 'POT'
+      ? '潜力属于成长概率，不受位置衰减。'
+      : (fit.distance === 0
+        ? `我的位置与他的适配位置一致，保留原始数值 ${fit.rawValue}。`
+        : `与我的位置相距 ${fit.distance} 档，数值由 ${fit.rawValue} 衰减 ${fit.decayPercent}% 至 ${value}。`);
     modalRoot.innerHTML = `
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="lock-title">
         <header class="modal-head"><h2 id="lock-title">锁定${attr[1]}</h2><button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">×</button></header>
         <div class="modal-body">
           <div class="confirm-player">
             <span class="player-avatar" style="--team-color:${team.primary}">${initials(player.name)}</span>
-            <div><strong>${player.name}</strong><div>${player.pos} · ${team.name}</div></div>
+            <div><strong>${player.name}</strong><div>${positionText} · ${team.name}</div></div>
           </div>
-          <p class="confirm-copy">将他的 <b>${attr[1]}</b> 锁定为 <b style="color:${DATA.grade(value).color}">${value}</b>。属性按球员原始能力值直接使用。</p>
+          <p class="confirm-copy">将他的 <b>${attr[1]}</b> 锁定为 <b style="color:${DATA.grade(value).color}">${value}</b>。${decayText}</p>
           <div class="confirm-actions">
             <button class="secondary-btn" type="button" data-action="close-modal">再想想</button>
             <button class="primary-btn" type="button" data-action="confirm-lock" data-attribute="${attributeKey}">确认锁定</button>
@@ -461,12 +487,16 @@
   function confirmLock(attributeKey) {
     const player = state.selectedPlayer;
     if (!player) return;
-    const value = player[attributeKey];
+    const fit = positionAdjustedAttribute(player, attributeKey);
+    const value = fit.value;
     state.attrs[attributeKey] = value;
     state.attrSlots[attributeKey] = {
       player: player.name,
       team: player.teamId,
-      value
+      value,
+      rawValue: fit.rawValue,
+      positionDistance: fit.distance,
+      decayPercent: fit.decayPercent
     };
     state.lockedCount += 1;
     state.usedPlayers.push(player.name);
@@ -517,7 +547,7 @@
   }
 
   function findSimilarPlayers(count) {
-    const candidates = Object.values(DATA.PLAYERS).flat().filter(player => player.pos === state.position);
+    const candidates = Object.values(DATA.PLAYERS).flat().filter(player => (player.positions || [player.pos]).includes(state.position));
     return candidates.map(player => {
       const distance = DATA.ATTRS.reduce((sum, [key]) => sum + Math.abs(state.attrs[key] - player[key]), 0) / DATA.ATTRS.length;
       return { ...player, similarity: Math.max(50, Math.round(100 - distance)) };
@@ -1736,7 +1766,7 @@
   }
 
   const HELP_PAGES = [
-    ['建球员', '14 项属性', '选择位置后随机抽取球队，从该队球员中选一人，再点击属性槽夺取一项能力。潜力表示年轻阶段每年触发能力提升的概率，不代表巅峰总评。每名球员只能使用一次，锁满十四项后自动计算总评、模板与相似球员。'],
+    ['建球员', '14 项属性', '选择位置后随机抽取球队，从该队球员中选一人，再点击属性槽夺取一项能力。球员可拥有多个现实适配位置；与我的位置越远，普通属性衰减越多，潜力不衰减。潜力表示年轻阶段每年触发能力提升的概率，不代表巅峰总评。每名球员只能使用一次。'],
     ['赛季', '82 场征程', '抽取生涯球队后进入常规赛。系统按球员属性、位置和球队实力模拟比赛，可单场推进，也可直接模拟完整赛季。场均数据会随属性组合变化。'],
     ['季后赛', '七场四胜', '常规赛前六名直通季后赛，七至十名参加附加赛。季后赛包含首轮、分区半决赛、分区决赛和总决赛，能力越强，晋级概率越高。'],
     ['结算', '独一无二', '完成建模后会生成能力卡，展示总评、十四项最终属性、打法模板和相似现役球员。二十年生涯、逐季数据和冠军记录保存在当前浏览器中。'],

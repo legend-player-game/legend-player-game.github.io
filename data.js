@@ -160,56 +160,72 @@
   const PLAYER_ATTRIBUTE_OVERRIDES = {
     '斯蒂芬-库里': { threePT: 99, MID: 94, HAN: 97, PAS: 91, CLU: 98, REB: 48, BLK: 40, STR: 55 },
     '斯蒂芬·库里': { threePT: 99, MID: 94, HAN: 97, PAS: 91, CLU: 98, REB: 48, BLK: 40, STR: 55 },
-    '杨瀚森': { threePT: 66, MID: 72, FIN: 77, HAN: 61, PAS: 74, PDEF: 57, IDEF: 80, BLK: 82, REB: 84, ATH: 67, STR: 79, CLU: 68 }
+    '卢卡-东契奇': { threePT: 88, MID: 91, FIN: 96, DNK: 75, HAN: 96, PAS: 97, PDEF: 70, IDEF: 68, BLK: 45, REB: 84, ATH: 82, STR: 86, CLU: 96 },
+    '勒布朗-詹姆斯': { threePT: 86, MID: 89, FIN: 97, DNK: 94, HAN: 91, PAS: 94, PDEF: 78, IDEF: 82, BLK: 78, REB: 85, ATH: 90, STR: 95, CLU: 96 },
+    '尼古拉-约基奇': { threePT: 83, MID: 94, FIN: 97, DNK: 75, HAN: 87, PAS: 99, PDEF: 63, IDEF: 86, BLK: 60, REB: 96, ATH: 68, STR: 96, CLU: 97 },
+    '扬尼斯-阿德托昆博': { threePT: 70, MID: 78, FIN: 99, DNK: 99, HAN: 88, PAS: 87, PDEF: 88, IDEF: 93, BLK: 88, REB: 94, ATH: 98, STR: 97, CLU: 91 },
+    '维克托-文班亚马': { threePT: 84, MID: 87, FIN: 95, DNK: 96, HAN: 80, PAS: 82, PDEF: 83, IDEF: 96, BLK: 99, REB: 92, ATH: 88, STR: 86, CLU: 90 },
+    '谢伊-吉尔杰斯-亚历山大': { threePT: 84, MID: 97, FIN: 98, DNK: 85, HAN: 97, PAS: 90, PDEF: 88, IDEF: 65, BLK: 64, REB: 72, ATH: 91, STR: 75, CLU: 98 },
+    '杨瀚森': { threePT: 63, MID: 68, FIN: 72, DNK: 70, HAN: 58, PAS: 71, PDEF: 54, IDEF: 72, BLK: 75, REB: 76, ATH: 63, STR: 72, CLU: 62 }
   };
 
-  function weightedRating(attrs, pos) {
-    return ATTRS.reduce((sum, [key], index) => sum + (attrs[key] || 0) * POSITION_WEIGHTS[pos][index], 0);
+  const POSITION_ATTRIBUTE_BASELINES = {
+    PG: [78, 75, 70, 55, 85, 85, 70, 45, 40, 50, 80, 55, 75],
+    SG: [80, 78, 75, 70, 80, 72, 75, 50, 45, 58, 82, 65, 75],
+    SF: [76, 76, 78, 75, 72, 68, 75, 65, 60, 70, 78, 75, 75],
+    PF: [70, 74, 82, 82, 62, 65, 68, 78, 76, 82, 72, 84, 72],
+    C: [58, 68, 86, 85, 50, 62, 55, 86, 86, 90, 65, 90, 70]
+  };
+
+  const MULTI_POSITION_GROUPS = [
+    [['斯蒂芬库里', '达米安利拉德', '凯里欧文', '杰伦布伦森', 'CJ麦科勒姆', '贾马尔穆雷', '德章泰穆雷', '朱霍勒迪', '德里克怀特', '泰瑞斯马克西', '达里厄斯加兰', '拉梅洛鲍尔', '马尔科姆布罗格登', '丹尼斯施罗德', '迈克康利', '克里斯保罗', '阿伦艾弗森'], ['PG', 'SG']],
+    [['卢卡东契奇', '詹姆斯哈登', '约什吉迪', '凯德坎宁安', '谢伊吉尔杰斯亚历山大'], ['PG', 'SG', 'SF']],
+    [['里夫斯', '奥斯汀里夫斯'], ['SG', 'PG', 'SF']],
+    [['德维恩韦德'], ['SG', 'PG']],
+    [['多诺万米切尔', '德文布克', '安东尼爱德华兹', '杰伦布朗', '扎克拉文', '布拉德利比尔', '泰勒希罗', '克莱汤普森', '巴迪希尔德', '诺曼鲍威尔', '卡姆托马斯', '杰伦格林', '德玛尔德罗赞', '科比布莱恩特', '雷阿伦', '文斯卡特', '特雷西麦克格雷迪'], ['SG', 'SF']],
+    [['勒布朗詹姆斯'], ['SF', 'PF', 'PG']],
+    [['杰森塔图姆', '凯文杜兰特', '吉米巴特勒', '科怀伦纳德', '保罗乔治', '杰伦威廉姆斯', '斯科蒂巴恩斯', '弗朗茨瓦格纳', '布兰登英格拉姆', '米卡尔布里奇斯', 'OG阿奴诺比', '安德鲁威金斯', '阿隆戈登', '杰拉米格兰特', '德安德烈亨特', '托拜厄斯哈里斯', '德尼阿夫迪亚', '凯尔库兹马', '劳里马尔卡宁', '卡梅隆安东尼', '保罗皮尔斯'], ['SF', 'PF']],
+    [['扬尼斯阿德托昆博', '小贾伦杰克逊', '朱利叶斯兰德尔', '锡安威廉森', '蔡恩威廉森', '德雷蒙德格林', '鲍比波蒂斯', '纳兹里德', '凯尔菲利波夫斯基', '蒂姆邓肯', '凯文加内特', '德克诺维茨基', '保罗加索尔', '克里斯波什'], ['PF', 'C']],
+    [['安东尼戴维斯', '维克托文班亚马', '埃文莫布里', '巴姆阿德巴约', '卡尔安东尼唐斯', '切特霍姆格伦', '多曼塔斯萨博尼斯', '迈尔斯特纳', '艾尔霍福德'], ['C', 'PF']]
+  ];
+
+  const PLAYER_POSITION_OVERRIDES = Object.fromEntries(
+    MULTI_POSITION_GROUPS.flatMap(([names, positions]) => names.map(name => [name, positions]))
+  );
+
+  function normalizePlayerName(name) {
+    return name.replace(/[\s·\-.]/g, '');
   }
 
-  function calibrateAttributes(attrs, pos, targetOVR, protectedKeys) {
-    const adjustable = ATTRS.map(([key]) => key).filter(key => key !== 'POT' && !protectedKeys.has(key));
-    for (let pass = 0; pass < 4; pass += 1) {
-      const delta = targetOVR - weightedRating(attrs, pos);
-      if (Math.abs(delta) < 0.45) break;
-      const availableWeight = adjustable.reduce((sum, key) => {
-        const index = ATTRS.findIndex(([attrKey]) => attrKey === key);
-        const canMove = delta > 0 ? attrs[key] < 99 : attrs[key] > 40;
-        return sum + (canMove ? POSITION_WEIGHTS[pos][index] : 0);
-      }, 0);
-      if (!availableWeight) break;
-      adjustable.forEach(key => {
-        const index = ATTRS.findIndex(([attrKey]) => attrKey === key);
-        if (!POSITION_WEIGHTS[pos][index]) return;
-        attrs[key] = Math.max(40, Math.min(99, Math.round(attrs[key] + delta / availableWeight)));
-      });
-    }
+  function getPlayerAttributeOverrides(name) {
+    return PLAYER_ATTRIBUTE_OVERRIDES[name] || Object.entries(PLAYER_ATTRIBUTE_OVERRIDES)
+      .find(([playerName]) => normalizePlayerName(playerName) === normalizePlayerName(name))?.[1] || {};
+  }
+
+  function getPlayerPositions(name, primaryPosition) {
+    return PLAYER_POSITION_OVERRIDES[normalizePlayerName(name)] || [primaryPosition];
   }
 
   function createPlayer(teamId, seed) {
-    const [name, pos, archetype, ovr, potential, age, rookieYear] = seed;
+    const [name, listedPosition, archetype, ovr, potential, age, rookieYear] = seed;
     const profile = ARCHETYPES[archetype];
     const hash = hashName(name);
-    const overrides = PLAYER_ATTRIBUTE_OVERRIDES[name] || {};
-    const specialtyIndexes = profile.values
-      .map((value, index) => ({ value, index }))
-      .sort((left, right) => right.value - left.value)
-      .slice(0, 3)
-      .map(item => item.index);
-    const protectedKeys = new Set([...specialtyIndexes.map(index => ATTRS[index][0]), ...Object.keys(overrides)]);
+    const overrides = getPlayerAttributeOverrides(name);
+    const positions = getPlayerPositions(name, listedPosition);
+    const pos = positions[0];
+    const generatedCeiling = Math.min(96, ovr + 6);
     const attrs = {};
     ATTRS.forEach(([key], index) => {
       if (key === 'POT') {
         attrs[key] = Math.max(40, Math.min(99, potential ?? (62 + hash % 31)));
         return;
       }
-      const jitter = ((hash >> (index % 16)) % 7) - 3;
-      const specialtyFactor = specialtyIndexes.includes(index) ? 0.4 : (profile.values[index] <= 65 ? 0.72 : 0.58);
-      attrs[key] = Math.max(40, Math.min(99, Math.round(profile.values[index] + (ovr - 88) * specialtyFactor + jitter)));
+      const jitter = ((hash >> (index % 16)) % 5) - 2;
+      const roleValue = profile.values[index] * 0.68 + POSITION_ATTRIBUTE_BASELINES[pos][index] * 0.32;
+      attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (ovr - 85) * 0.85 + jitter)));
     });
     Object.assign(attrs, overrides);
-    calibrateAttributes(attrs, pos, ovr, protectedKeys);
-    return { name, pos, archetype, archetypeLabel: profile.label, ovr, teamId, age, rookieYear, ...attrs };
+    return { name, pos, positions, archetype, archetypeLabel: profile.label, ovr, teamId, age, rookieYear, ...attrs };
   }
 
   const ACTIVE_ROSTER_SEEDS = window.NBA_ROSTER_SEEDS || Object.fromEntries(
