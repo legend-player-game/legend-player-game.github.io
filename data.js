@@ -15,7 +15,7 @@
     ['ATH', '运动', '速度与爆发'],
     ['STR', '力量', '身体对抗'],
     ['CLU', '关键', '关键球表现'],
-    ['POT', '潜力', '生涯成长上限']
+    ['POT', '潜力', '年轻阶段触发能力提升的概率']
   ];
 
   const TEAMS = [
@@ -157,20 +157,58 @@
     return value;
   }
 
+  const PLAYER_ATTRIBUTE_OVERRIDES = {
+    '斯蒂芬-库里': { threePT: 99, MID: 94, HAN: 97, PAS: 91, CLU: 98, REB: 48, BLK: 40, STR: 55 },
+    '斯蒂芬·库里': { threePT: 99, MID: 94, HAN: 97, PAS: 91, CLU: 98, REB: 48, BLK: 40, STR: 55 },
+    '杨瀚森': { threePT: 66, MID: 72, FIN: 77, HAN: 61, PAS: 74, PDEF: 57, IDEF: 80, BLK: 82, REB: 84, ATH: 67, STR: 79, CLU: 68 }
+  };
+
+  function weightedRating(attrs, pos) {
+    return ATTRS.reduce((sum, [key], index) => sum + (attrs[key] || 0) * POSITION_WEIGHTS[pos][index], 0);
+  }
+
+  function calibrateAttributes(attrs, pos, targetOVR, protectedKeys) {
+    const adjustable = ATTRS.map(([key]) => key).filter(key => key !== 'POT' && !protectedKeys.has(key));
+    for (let pass = 0; pass < 4; pass += 1) {
+      const delta = targetOVR - weightedRating(attrs, pos);
+      if (Math.abs(delta) < 0.45) break;
+      const availableWeight = adjustable.reduce((sum, key) => {
+        const index = ATTRS.findIndex(([attrKey]) => attrKey === key);
+        const canMove = delta > 0 ? attrs[key] < 99 : attrs[key] > 40;
+        return sum + (canMove ? POSITION_WEIGHTS[pos][index] : 0);
+      }, 0);
+      if (!availableWeight) break;
+      adjustable.forEach(key => {
+        const index = ATTRS.findIndex(([attrKey]) => attrKey === key);
+        if (!POSITION_WEIGHTS[pos][index]) return;
+        attrs[key] = Math.max(40, Math.min(99, Math.round(attrs[key] + delta / availableWeight)));
+      });
+    }
+  }
+
   function createPlayer(teamId, seed) {
     const [name, pos, archetype, ovr, potential, age, rookieYear] = seed;
     const profile = ARCHETYPES[archetype];
     const hash = hashName(name);
-    const scale = 0.72 + (ovr - 70) / 85;
+    const overrides = PLAYER_ATTRIBUTE_OVERRIDES[name] || {};
+    const specialtyIndexes = profile.values
+      .map((value, index) => ({ value, index }))
+      .sort((left, right) => right.value - left.value)
+      .slice(0, 3)
+      .map(item => item.index);
+    const protectedKeys = new Set([...specialtyIndexes.map(index => ATTRS[index][0]), ...Object.keys(overrides)]);
     const attrs = {};
     ATTRS.forEach(([key], index) => {
       if (key === 'POT') {
-        attrs[key] = Math.max(ovr, Math.min(99, potential || ovr));
+        attrs[key] = Math.max(40, Math.min(99, potential ?? (62 + hash % 31)));
         return;
       }
       const jitter = ((hash >> (index % 16)) % 7) - 3;
-      attrs[key] = Math.max(45, Math.min(99, Math.round(profile.values[index] * scale + jitter)));
+      const specialtyFactor = specialtyIndexes.includes(index) ? 0.4 : (profile.values[index] <= 65 ? 0.72 : 0.58);
+      attrs[key] = Math.max(40, Math.min(99, Math.round(profile.values[index] + (ovr - 88) * specialtyFactor + jitter)));
     });
+    Object.assign(attrs, overrides);
+    calibrateAttributes(attrs, pos, ovr, protectedKeys);
     return { name, pos, archetype, archetypeLabel: profile.label, ovr, teamId, age, rookieYear, ...attrs };
   }
 
