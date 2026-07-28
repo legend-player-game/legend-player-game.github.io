@@ -1582,6 +1582,41 @@ button.attribute-slot:not(:disabled):hover {
   margin-top: 14px;
 }
 
+.offseason-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.trade-btn {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #9a7620;
+  border-radius: 6px;
+  color: #5f470c;
+  background: #fff0b8;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.trade-request-result {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  margin: 16px 0 2px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--gold);
+  background: #fff8d9;
+  color: #5f554b;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.trade-request-result b {
+  color: #7c5c0d;
+  white-space: nowrap;
+}
+
 .playoff-bracket {
   display: grid;
   gap: 8px;
@@ -2049,6 +2084,87 @@ button.attribute-slot:not(:disabled):hover {
   text-align: center;
 }
 
+.legacy-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+  margin: 18px 16px 0;
+}
+
+.legacy-badge {
+  padding: 6px 10px;
+  border: 1px solid #9a7620;
+  border-radius: 4px;
+  color: #60480d;
+  background: #fff0b8;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.legacy-dimensions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 16px 18px;
+}
+
+.legacy-dimension {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--white);
+}
+
+.legacy-dimension > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.legacy-dimension span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.legacy-dimension b {
+  color: var(--orange-dark);
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+.legacy-dimension i {
+  display: block;
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--paper-deep);
+}
+
+.legacy-dimension em {
+  display: block;
+  height: 100%;
+  background: var(--orange);
+}
+
+.legacy-caveat {
+  margin: 0 16px 22px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--mint);
+  background: rgba(255, 253, 248, 0.8);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.legacy-caveat b {
+  margin-right: 8px;
+  color: var(--ink);
+}
+
 .career-summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0 16px;
@@ -2131,6 +2247,10 @@ button.attribute-slot:not(:disabled):hover {
   .career-summary-grid,
   .retirement-average-row,
   .retirement-awards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .legacy-dimensions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2285,6 +2405,11 @@ button.attribute-slot:not(:disabled):hover {
   .reveal-actions,
   .season-actions {
     grid-template-columns: 1fr;
+  }
+
+  .trade-request-result {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 
   .season-hero {
