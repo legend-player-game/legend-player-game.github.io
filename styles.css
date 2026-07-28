@@ -1178,7 +1178,7 @@ button.attribute-slot:not(:disabled):hover {
 
 .season-detail-stats {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1617,6 +1617,15 @@ button.attribute-slot:not(:disabled):hover {
   white-space: nowrap;
 }
 
+.trade-request-result.is-rejected {
+  border-left-color: #b94136;
+  background: #fff0ec;
+}
+
+.trade-request-result.is-rejected b {
+  color: #9f2f27;
+}
+
 .playoff-bracket {
   display: grid;
   gap: 8px;
@@ -1930,6 +1939,100 @@ button.attribute-slot:not(:disabled):hover {
 .career-event-strip b {
   flex: 0 0 auto;
   color: var(--orange-dark);
+}
+
+.season-context-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7f4ed;
+}
+
+.season-context-grid > div {
+  min-width: 0;
+  padding: 11px 12px;
+  border-right: 1px solid var(--line);
+}
+
+.season-context-grid > div:last-child {
+  border-right: 0;
+}
+
+.season-context-grid span,
+.season-context-grid b,
+.season-context-grid small {
+  display: block;
+}
+
+.season-context-grid span,
+.season-context-grid small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.season-context-grid b {
+  margin: 3px 0;
+  font-size: 15px;
+}
+
+.injury-strip {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-left: 4px solid #d89824;
+  background: #fff4d8;
+  font-size: 12px;
+}
+
+.injury-strip b { flex: 0 0 auto; }
+.injury-strip.is-severe { border-color: #c5533f; background: #fff0e8; }
+.injury-strip.is-devastating { border-color: #8e211d; background: #f9e3e1; }
+.injury-strip.is-recovered { border-color: #4d8c6a; background: #eaf4ee; }
+
+.league-injury-report {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  background: #f7f7f5;
+}
+
+.league-injury-report > div:first-child,
+.league-injury-list,
+.league-injury-list span {
+  display: flex;
+}
+
+.league-injury-report > div:first-child,
+.league-injury-list {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.league-injury-report small { color: var(--muted); }
+
+.league-injury-list span {
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.league-injury-list img {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  object-fit: contain;
 }
 
 .career-history-modal {
@@ -2427,15 +2530,33 @@ button.attribute-slot:not(:disabled):hover {
   }
 
   .season-detail-stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .season-detail-stat:nth-child(3) {
+  .season-detail-stat:nth-child(4) {
     border-right: 0;
   }
 
-  .season-detail-stat:nth-child(-n+3) {
+  .season-detail-stat:nth-child(-n+4) {
     border-bottom: 1px solid var(--line);
+  }
+
+  .season-context-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .season-context-grid > div:nth-child(2) { border-right: 0; }
+  .season-context-grid > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+
+  .injury-strip {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .league-injury-report {
+    grid-template-columns: 1fr;
+    gap: 10px;
   }
 
   .honor-grid {

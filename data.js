@@ -18,6 +18,17 @@
     ['POT', '潜力', '年轻阶段触发能力提升的概率']
   ];
 
+  const CURRENT_LOGO_OVERRIDES = {
+    CHA: 'assets/logos/cha-current.png',
+    NOP: 'assets/logos/nop-current.png',
+    UTA: 'assets/logos/uta-current.svg'
+  };
+
+  const ERA_LOGO_OVERRIDES = {
+    '2003': { NOH: 'assets/logos/noh-2003.png', UTA: 'assets/logos/uta-2003.png' },
+    '2009': { CHA: 'assets/logos/cha-2009.png', NOH: 'assets/logos/noh-2009.png', UTA: 'assets/logos/uta-2009.png' }
+  };
+
   const TEAMS = [
     ['ATL', '亚特兰大老鹰', 'EAST', '#e03a3e', '#c1d32f'],
     ['BOS', '波士顿凯尔特人', 'EAST', '#007a33', '#ba9653'],
@@ -55,7 +66,7 @@
     conference,
     primary,
     secondary,
-    logo: `https://a.espncdn.com/i/teamlogos/nba/500/${id.toLowerCase()}.png`
+    logo: CURRENT_LOGO_OVERRIDES[id] || `https://a.espncdn.com/i/teamlogos/nba/500/${id.toLowerCase()}.png`
   }));
 
   const ARCHETYPES = {
@@ -251,8 +262,17 @@
   let activeTeams = TEAMS;
   let activePlayers = CURRENT_PLAYERS;
 
+  function withEraBranding(era) {
+    if (!era || era.key === 'current') return era;
+    const logoOverrides = ERA_LOGO_OVERRIDES[String(era.key)] || {};
+    return {
+      ...era,
+      teams: era.teams.map(team => ({ ...team, logo: logoOverrides[team.id] || team.logo }))
+    };
+  }
+
   function setEra(key = 'current') {
-    const era = key === 'current' ? CURRENT_ERA : window.NBA_ERA_DATA?.eras?.[String(key)];
+    const era = key === 'current' ? CURRENT_ERA : withEraBranding(window.NBA_ERA_DATA?.eras?.[String(key)]);
     if (!era) return false;
     activeEra = era;
     activeTeams = era.teams;
@@ -271,7 +291,7 @@
 
   function getEra(key = activeEra.key) {
     if (key === 'current') return CURRENT_ERA;
-    return window.NBA_ERA_DATA?.eras?.[String(key)] || CURRENT_ERA;
+    return withEraBranding(window.NBA_ERA_DATA?.eras?.[String(key)]) || CURRENT_ERA;
   }
 
   function getDraftClass(year) {
