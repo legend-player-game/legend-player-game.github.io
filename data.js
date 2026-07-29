@@ -236,7 +236,13 @@
       attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (ovr - 85) * 0.85 + jitter)));
     });
     Object.assign(attrs, overrides);
-    return { name, pos, positions, archetype, archetypeLabel: profile.label, ovr, teamId, age, rookieYear, ...attrs };
+    const attributeOvr = Math.round(ATTRS.reduce((sum, [key], index) => (
+      sum + (attrs[key] || 0) * POSITION_WEIGHTS[pos][index]
+    ), 0));
+    // Official OVR remains the public rating anchor. The internal value only allows a
+    // small attributes-based adjustment, so archetype generation cannot inflate ratings.
+    const simOvr = Math.max(ovr - 2, Math.min(ovr + 2, Math.round(ovr * 0.85 + attributeOvr * 0.15)));
+    return { name, pos, positions, archetype, archetypeLabel: profile.label, ovr, sourceOvr: ovr, attributeOvr, simOvr, teamId, age, rookieYear, ...attrs };
   }
 
   const ACTIVE_ROSTER_SEEDS = window.NBA_ROSTER_SEEDS || Object.fromEntries(
