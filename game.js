@@ -3,15 +3,18 @@
 
   const DATA = window.GAME_DATA;
   const SIM = window.SIM_CORE;
+  const STATE = window.GAME_STATE_CORE;
   const app = document.getElementById('app');
   const modalRoot = document.getElementById('modal-root');
   const toastEl = document.getElementById('toast');
   const backBtn = document.getElementById('back-btn');
   const homeBtn = document.getElementById('home-btn');
   const soundBtn = document.getElementById('sound-btn');
-  const SAVE_KEY = 'build-a-player-save-v5';
-  const LEGACY_SAVE_KEYS = ['build-a-player-save-v4', 'build-a-player-save-v3'];
-  const SAVE_SCHEMA_VERSION = 5;
+  const SAVE_KEY = 'build-a-player-save-v7';
+  const SAVE_BACKUP_KEY = 'build-a-player-save-backup-v7';
+  const SAVE_TEMP_KEY = 'build-a-player-save-temp-v7';
+  const LEGACY_SAVE_KEYS = ['build-a-player-save-v6', 'build-a-player-save-v5', 'build-a-player-save-v4', 'build-a-player-save-v3'];
+  const SAVE_SCHEMA_VERSION = 7;
   const HONOR_KEY = 'build-a-player-honors-v1';
   const CAREER_SEASONS = 20;
   const CAREER_START_AGE = 18;
@@ -46,6 +49,8 @@
   let spinTimer = null;
   const simulationTimers = new Set();
   let debugCareerMode = false;
+  let lastStoredSource = null;
+  let lastStoredRecovered = false;
   let state = freshState();
 
   function freshState() {
@@ -54,6 +59,8 @@
       eraKey: 'current',
       resumeScreen: null,
       schemaVersion: SAVE_SCHEMA_VERSION,
+      sessionId: null,
+      savedAt: null,
       sound: true,
       rngState: 0,
       position: null,
@@ -209,6 +216,38 @@
     state.season.roleProfile = buildSeasonRoleProfile();
   }
 
+  function activateLowLegacyDebugState() {
+    state = buildDebugCareerState(4);
+    const totals = { pts: 912, reb: 287, ast: 333, stl: 51, blk: 14, tov: 98, fgm: 351, fga: 882, tpm: 74, tpa: 246, ftm: 136, fta: 181, min: 2690 };
+    state.finalOVR = 48;
+    state.career.currentOVR = 48;
+    state.career.peakOVR = 48;
+    state.career.age = 22;
+    state.career.retirementAge = 22;
+    state.career.completed = true;
+    state.career.history = Array.from({ length: 4 }, (_, index) => ({
+      seasonNumber: index + 1,
+      age: 18 + index,
+      teamId: 'IND',
+      ovr: 45 + index,
+      games: 82,
+      wins: 24,
+      losses: 58,
+      totals: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / 4])),
+      averages: { pts: '2.8', reb: '0.9', ast: '1.0', min: '8.2' },
+      awards: [],
+      champion: false,
+      postseason: '无缘季后赛'
+    }));
+    state.career.totals = totals;
+    state.career.totalGames = 328;
+    state.career.awardCounts = {};
+    state.career.championships = 0;
+    state.career.teamsPlayed = ['IND'];
+    state.season.stage = 'career-complete';
+    renderSeason();
+  }
+
   function activateArchetypeDebugState(position) {
     state = freshState();
     state.position = position;
@@ -229,6 +268,12 @@
     const roll = SIM.nextRandom(holder.rngState);
     holder.rngState = roll.seed;
     return roll.value;
+  }
+
+  function transitionSeasonStage(nextStage) {
+    if (!state.season || !STATE.canTransitionSeason(state.season.stage, nextStage)) return false;
+    state.season.stage = nextStage;
+    return true;
   }
 
   function startSimulationTimer(callback, delay) {
@@ -287,6 +332,12 @@
     const saved = loadStoredGame();
     continueBtn.disabled = !saved || (!saved.resumeScreen && saved.screen === 'home');
     continueBtn.title = continueBtn.disabled ? '暂无可继续的进度' : '继续最近一次游戏';
+    if (!continueBtn.disabled && saved.career) {
+      continueBtn.innerHTML = `<span>&#8635;</span> 继续第 ${saved.career.seasonNumber} 季`;
+    }
+    const backupBtn = app.querySelector('[data-action="restore-backup"]');
+    const backup = loadBackupGame();
+    backupBtn.hidden = !STATE.hasMeaningfulProgress(backup);
   }
 
   function renderEraSelect() {
@@ -445,17 +496,52 @@
     return name.replace(/[·\-]/g, '').slice(-2);
   }
 
-  function startGame(eraKey = 'current') {
+  function beginNewGame(eraKey = 'current') {
     stopSimulationTimers();
     if (spinTimer) window.clearInterval(spinTimer);
     spinTimer = null;
     state = freshState();
     state.eraKey = eraKey;
+    state.sessionId = `${eraKey}-${Date.now().toString(36)}`;
     state.rngState = hashText(`${eraKey}-${Date.now()}-${Math.random()}`);
     DATA.setEra(eraKey);
     state.screen = 'position';
     playTone(380, 0.07);
     showScreen('position');
+  }
+
+  function savedProgressLabel(saved) {
+    if (saved?.career) {
+      const team = DATA.getTeam(saved.career.currentTeam);
+      return `${team?.name || '当前球队'} · 生涯第 ${saved.career.seasonNumber} 季 · ${saved.career.age} 岁`;
+    }
+    const labels = { position: '位置选择', build: '属性建模', reveal: '建模完成', career: '球队抽签', season: '赛季模拟' };
+    return labels[saved?.resumeScreen || saved?.screen] || '未完成的新生涯';
+  }
+
+  function requestNewGame(eraKey = 'current') {
+    const saved = loadStoredGame();
+    if (!STATE.hasMeaningfulProgress(saved)) {
+      beginNewGame(eraKey);
+      return;
+    }
+    modalRoot.innerHTML = `
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="new-game-title">
+        <header class="modal-head"><div><span class="modal-kicker">SAVE PROTECTION</span><h2 id="new-game-title">开始新的生涯？</h2></div><button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">×</button></header>
+        <div class="modal-body">
+          <p class="confirm-copy">当前进度为“${savedProgressLabel(saved)}”。开始新游戏前会自动保留一份备份，可从首页恢复。</p>
+          <div class="confirm-actions">
+            <button class="secondary-btn" type="button" data-action="close-modal">继续旧生涯</button>
+            <button class="primary-btn" type="button" data-action="confirm-new-game" data-era="${eraKey}">备份并开始</button>
+          </div>
+        </div>
+      </section>`;
+  }
+
+  function confirmNewGame(eraKey) {
+    if (!preserveCurrentSaveAsBackup()) return;
+    closeModal();
+    beginNewGame(eraKey || 'current');
   }
 
   function selectPosition(position) {
@@ -879,24 +965,40 @@
     return value >>> 0;
   }
 
-  function inferLeagueAge(player) {
-    const variance = hashText(player.name) % 4;
-    if (INITIAL_ROOKIES.has(player.name)) return 19;
-    if (player.ovr <= 74) return 21 + (hashText(player.name) % 10);
-    if (player.ovr >= 90) return 27 + (hashText(player.name) % 8);
-    return 23 + variance * 3;
+  function attributeValuesFromSnapshot(snapshot) {
+    return Object.fromEntries(DATA.ATTRS.map(([key]) => [key, snapshot[key]]));
+  }
+
+  function generatedLeagueAttributes(player) {
+    const snapshot = DATA.createPlayerSnapshot({
+      name: player.name,
+      pos: player.pos,
+      archetype: player.archetype,
+      ovr: player.ovr,
+      potential: player.potential ?? 70,
+      eraKey: state.eraKey
+    });
+    return attributeValuesFromSnapshot(snapshot);
+  }
+
+  function ensureLeaguePlayerAttributes(player) {
+    const valid = player.attrs && DATA.ATTRS.every(([key]) => Number.isFinite(player.attrs[key]));
+    if (!valid) player.attrs = generatedLeagueAttributes(player);
+    player.attrs.POT = clamp(player.potential ?? player.attrs.POT ?? 70, 40, 99);
+    player.attributeOvr = DATA.calculateAttributeOverall(player.attrs, player.pos);
+    player.defense = Math.round(['PDEF', 'IDEF', 'BLK', 'REB'].reduce((sum, key) => sum + player.attrs[key], 0) / 4);
+    return player.attrs;
   }
 
   function createLeaguePlayer(player) {
-    const age = Number.isFinite(player.age) ? player.age : inferLeagueAge(player);
+    const age = Number.isFinite(player.age) ? player.age : 24;
     const eraStartYear = DATA.getEra(state.eraKey).startYear;
     const initialProspect = state.eraKey === 'current' ? null : DATA.getDraftClass(eraStartYear).find(prospect => prospect.name === player.name);
     let seasons = INITIAL_ROOKIES.has(player.name) ? 0 : Math.max(1, age - 20);
     if (Number.isFinite(player.rookieYear)) {
       seasons = Math.max(0, eraStartYear - player.rookieYear);
-      if (seasons === 0 && !initialProspect) seasons = 1;
     }
-    return {
+    const leaguePlayer = {
       id: `base-${hashText(`${player.teamId}-${player.name}`)}`,
       name: player.name,
       teamId: player.teamId,
@@ -904,15 +1006,16 @@
       positions: player.positions || [player.pos],
       archetype: player.archetype,
       age,
+      ageSource: player.ageSource || 'era-roster',
       sourceOvr: player.sourceOvr ?? player.ovr,
-      simOvr: player.simOvr ?? player.ovr,
+      simOvr: player.ovr,
       attributeOvr: player.attributeOvr ?? player.ovr,
-      ovr: player.simOvr ?? player.ovr,
+      ovr: player.ovr,
       potential: clamp(player.POT ?? 70, 40, 99),
       defense: Math.round((player.PDEF + player.IDEF + player.BLK + player.REB) / 4),
       seasons,
       rookieYear: player.rookieYear,
-      draftYear: initialProspect ? eraStartYear : undefined,
+      draftYear: initialProspect || seasons === 0 ? eraStartYear : undefined,
       draftOrder: initialProspect?.order,
       projected: Boolean(initialProspect?.projected),
       luck: 45 + hashText(`health-${player.name}`) % 51,
@@ -925,6 +1028,9 @@
       contractYears: 1 + hashText(`contract-${player.name}`) % 4,
       active: true
     };
+    leaguePlayer.attrs = attributeValuesFromSnapshot(player);
+    ensureLeaguePlayerAttributes(leaguePlayer);
+    return leaguePlayer;
   }
 
   function canonicalLeagueName(name) {
@@ -948,7 +1054,7 @@
     const archetypes = POSITION_ARCHETYPES[pos];
     const archetype = archetypes[(key >>> 13) % archetypes.length];
     const ovr = 67 + (key % 9);
-    return {
+    const player = {
       id: `depth-${league.eraKey}-${seasonNumber}-${teamId}-${key}`,
       name,
       teamId,
@@ -956,6 +1062,7 @@
       positions: [pos],
       archetype,
       age: 22 + (key % 8),
+      ageSource: 'generated',
       sourceOvr: ovr,
       simOvr: ovr,
       ovr,
@@ -973,6 +1080,9 @@
       depthPlayer: true,
       active: true
     };
+    player.attrs = generatedLeagueAttributes(player);
+    ensureLeaguePlayerAttributes(player);
+    return player;
   }
 
   function fillLeagueRosters(league, seasonNumber) {
@@ -1020,92 +1130,100 @@
       contractYears: state.career.contract?.yearsRemaining || 1,
       active: true
     });
+    player.attrs = Object.fromEntries(DATA.ATTRS.map(([key]) => [key, state.attrs[key]]));
+    ensureLeaguePlayerAttributes(player);
     if (league.players.filter(item => item.active && item.teamId === player.teamId).length > 15) trimLeagueRosters(league);
     return player;
   }
 
-  function rookieName(league, seasonNumber, index) {
+  function rookieName(seasonNumber, index) {
     const offset = seasonNumber * 37 + index * 11;
-    const base = `${ROOKIE_FIRST_NAMES[offset % ROOKIE_FIRST_NAMES.length]}·${ROOKIE_LAST_NAMES[(offset * 7 + seasonNumber) % ROOKIE_LAST_NAMES.length]}`;
-    const duplicateCount = league.players.filter(player => player.name === base).length;
-    return duplicateCount ? `${base}${duplicateCount + 1}世` : base;
+    return `${ROOKIE_FIRST_NAMES[offset % ROOKIE_FIRST_NAMES.length]}·${ROOKIE_LAST_NAMES[(offset * 7 + seasonNumber) % ROOKIE_LAST_NAMES.length]}`;
+  }
+
+  function generatedDraftClass(league, seasonNumber, draftYear) {
+    const reservedNames = new Set(league.players.map(player => canonicalLeagueName(player.name)));
+    const reserveUniqueName = base => {
+      let candidate = base;
+      let suffix = 2;
+      while (reservedNames.has(canonicalLeagueName(candidate))) {
+        candidate = `${base}${suffix}世`;
+        suffix += 1;
+      }
+      reservedNames.add(canonicalLeagueName(candidate));
+      return candidate;
+    };
+    return Array.from({ length: 15 }, (_, index) => {
+      const key = hashText(`${league.eraKey}-${draftYear}-${index}`);
+      const pos = POSITION_ORDER[(seasonNumber + index * 3) % POSITION_ORDER.length];
+      const archetypes = POSITION_ARCHETYPES[pos];
+      const archetype = archetypes[key % archetypes.length];
+      const talent = Math.round(((key >>> 7) % 7) - 2);
+      const ovr = clamp(84 - Math.floor(index / 3) * 2 + talent, 72, 86);
+      return {
+        order: index + 1,
+        name: reserveUniqueName(rookieName(seasonNumber, index)),
+        pos,
+        archetype,
+        ovr,
+        potential: clamp(ovr + 6 + ((key >>> 12) % 7), 76, 99),
+        age: 19,
+        projected: true
+      };
+    });
+  }
+
+  function createLeagueRookie(league, prospect, teamId, draftYear) {
+    const player = {
+      id: `draft-${draftYear}-${prospect.order}-${hashText(prospect.name)}`,
+      name: prospect.name,
+      teamId,
+      pos: prospect.pos,
+      positions: [prospect.pos],
+      archetype: prospect.archetype,
+      age: prospect.age,
+      ageSource: prospect.projected ? 'generated' : 'draft-class',
+      sourceOvr: prospect.ovr,
+      simOvr: prospect.ovr,
+      ovr: prospect.ovr,
+      potential: prospect.potential,
+      seasons: 0,
+      rookieYear: draftYear,
+      draftYear,
+      draftOrder: prospect.order,
+      projected: Boolean(prospect.projected),
+      luck: 45 + hashText(`health-${prospect.name}`) % 51,
+      injuryHistory: [],
+      seasonInjury: null,
+      seasonRole: null,
+      pendingInjuryDecline: 0,
+      forcedRetirement: false,
+      seasonHistory: [],
+      contractYears: 4,
+      active: true
+    };
+    const snapshot = DATA.createPlayerSnapshot({ ...prospect, eraKey: league.eraKey });
+    player.positions = snapshot.positions || player.positions;
+    player.attrs = attributeValuesFromSnapshot(snapshot);
+    ensureLeaguePlayerAttributes(player);
+    return player;
   }
 
   function addRookieClass(league, seasonNumber) {
-    if (league.eraKey !== 'current') {
-      const draftYear = league.startYear + seasonNumber - 1;
-      const draftClass = DATA.getDraftClass(draftYear).slice().sort((left, right) => left.order - right.order);
-      const existingNames = new Set(league.players.filter(player => player.active).map(player => player.name));
-      const incomingProspects = draftClass.filter(prospect => !existingNames.has(prospect.name));
-      const weakestTeams = DATA.TEAMS.map(team => ({ team, strength: teamStrengthForLeague(league, team.id) }))
-        .sort((left, right) => left.strength - right.strength);
-      incomingProspects.forEach((prospect, index) => {
-        const team = weakestTeams[index % weakestTeams.length].team;
-        const profile = DATA.ARCHETYPES[prospect.archetype] || DATA.ARCHETYPES.wing;
-        league.players.push({
-          id: `draft-${draftYear}-${prospect.order}-${hashText(prospect.name)}`,
-          name: prospect.name,
-          teamId: team.id,
-          pos: prospect.pos,
-          positions: [prospect.pos],
-          archetype: prospect.archetype,
-          age: prospect.age,
-          sourceOvr: prospect.ovr,
-          simOvr: prospect.ovr,
-          ovr: prospect.ovr,
-          potential: prospect.potential,
-          defense: clamp(Math.round((prospect.ovr + profile.values[6] + profile.values[7] + profile.values[8]) / 4), 50, 99),
-          seasons: 0,
-          rookieYear: draftYear,
-          draftYear,
-          draftOrder: prospect.order,
-          projected: Boolean(prospect.projected),
-          luck: 45 + hashText(`health-${prospect.name}`) % 51,
-          injuryHistory: [],
-          seasonInjury: null,
-          seasonRole: null,
-          pendingInjuryDecline: 0,
-          forcedRetirement: false,
-          seasonHistory: [],
-          contractYears: 4,
-          active: true
-        });
-      });
-      return incomingProspects.length;
-    }
-    DATA.TEAMS.forEach((team, index) => {
-      const talentRoll = Math.max(-2, Math.min(5, Math.round(randomNormal() * 2)));
-      const ovr = clamp(76 + (hashText(`${seasonNumber}-${team.id}`) % 6) + talentRoll, 72, 86);
-      const potential = clamp(55 + (hashText(`${team.id}-${seasonNumber}-pot`) % 43), 40, 99);
-      const pos = ['PG', 'SG', 'SF', 'PF', 'C'][(seasonNumber + index * 3) % 5];
-      const archetypes = POSITION_ARCHETYPES[pos];
-      const archetype = archetypes[(seasonNumber + index) % archetypes.length];
-      league.players.push({
-        id: `rookie-${seasonNumber}-${team.id}`,
-        name: rookieName(league, seasonNumber, index),
-        teamId: team.id,
-        pos,
-        positions: [pos],
-        archetype,
-        age: 19,
-        sourceOvr: ovr,
-        simOvr: ovr,
-        ovr,
-        potential,
-        defense: clamp(ovr + (['anchor', 'twoway'].includes(archetype) ? 5 : -4) + talentRoll, 55, 96),
-        seasons: 0,
-        luck: 45 + hashText(`health-${seasonNumber}-${team.id}`) % 51,
-        injuryHistory: [],
-        seasonInjury: null,
-        seasonRole: null,
-        pendingInjuryDecline: 0,
-        forcedRetirement: false,
-        seasonHistory: [],
-        contractYears: 4,
-        active: true
-      });
+    const draftYear = league.startYear + seasonNumber - 1;
+    const historicalClass = DATA.getDraftClass(draftYear).slice().sort((left, right) => left.order - right.order).slice(0, 15);
+    const draftClass = historicalClass.length ? historicalClass : generatedDraftClass(league, seasonNumber, draftYear);
+    const existingNames = new Set(league.players.map(player => canonicalLeagueName(player.name)));
+    const incomingProspects = seasonNumber === 1
+      ? draftClass.filter(prospect => !existingNames.has(canonicalLeagueName(prospect.name)))
+      : draftClass;
+    const weakestTeams = DATA.TEAMS.map(team => ({ team, strength: teamStrengthForLeague(league, team.id) }))
+      .sort((left, right) => left.strength - right.strength);
+    incomingProspects.forEach((prospect, index) => {
+      const team = weakestTeams[index % weakestTeams.length].team;
+      league.players.push(createLeagueRookie(league, prospect, team.id, draftYear));
     });
-    return DATA.TEAMS.length;
+    return incomingProspects.length;
   }
 
   function teamStrengthForLeague(league, teamId) {
@@ -1118,7 +1236,7 @@
     DATA.TEAMS.forEach(team => {
       const roster = league.players
         .filter(player => player.active && player.teamId === team.id)
-        .sort((left, right) => ((right.isUser ? 1000 : 0) + right.ovr + (right.seasons === 0 ? 2 : 0)) - ((left.isUser ? 1000 : 0) + left.ovr + (left.seasons === 0 ? 2 : 0)));
+        .sort((left, right) => ((right.isUser ? 2000 : 0) + (right.seasons === 0 ? 1000 : 0) + right.ovr) - ((left.isUser ? 2000 : 0) + (left.seasons === 0 ? 1000 : 0) + left.ovr));
       roster.slice(15).forEach(player => {
         player.active = false;
         player.exitReason = '离开联盟';
@@ -1456,8 +1574,7 @@
     const canonicalPlayers = new Map();
     Object.values(DATA.PLAYERS).flat().forEach(player => {
       const key = canonicalLeagueName(player.name);
-      const existing = canonicalPlayers.get(key);
-      if (!existing || player.ovr > existing.ovr) canonicalPlayers.set(key, player);
+      if (!canonicalPlayers.has(key)) canonicalPlayers.set(key, player);
     });
     const league = {
       eraKey: state.eraKey,
@@ -1480,6 +1597,26 @@
     const potentialFactor = clamp(((potential ?? 70) - 40) / 59, 0, 1);
     const ageFactor = age <= 21 ? 1 : (age <= 24 ? 0.82 : (age <= 27 ? 0.55 : (age <= 30 ? 0.25 : 0)));
     return clamp((0.12 + potentialFactor * 0.75) * ageFactor, 0, 0.9);
+  }
+
+  function evolveLeaguePlayerAttributes(player, overallChange, injuryDecline = 0) {
+    const attrs = ensureLeaguePlayerAttributes(player);
+    const focusByArchetype = {
+      sniper: ['threePT', 'MID', 'CLU'], creator: ['HAN', 'PAS', 'MID'], slasher: ['FIN', 'DNK', 'ATH'],
+      wing: ['FIN', 'PDEF', 'ATH'], anchor: ['IDEF', 'BLK', 'REB'], big: ['FIN', 'REB', 'STR'],
+      twoway: ['PDEF', 'IDEF', 'ATH'], pointbig: ['PAS', 'REB', 'IDEF']
+    };
+    const focus = new Set(focusByArchetype[player.archetype] || []);
+    const injurySensitive = new Set(['FIN', 'DNK', 'PDEF', 'IDEF', 'REB', 'ATH', 'STR']);
+    DATA.ATTRS.forEach(([key]) => {
+      if (key === 'POT') return;
+      const focusScale = focus.has(key) ? 1.15 : 0.72;
+      const injuryPenalty = injurySensitive.has(key) ? injuryDecline * 0.35 : injuryDecline * 0.12;
+      const noise = Math.abs(overallChange) >= 0.5 ? randomNormal() * 0.18 : 0;
+      attrs[key] = clamp(Math.round(attrs[key] + overallChange * focusScale - injuryPenalty + noise), 40, 99);
+    });
+    attrs.POT = player.potential;
+    ensureLeaguePlayerAttributes(player);
   }
 
   function evolveLeagueSeason(league, nextSeasonNumber) {
@@ -1532,7 +1669,7 @@
       else change = -1.8 - (player.age - 35) * 0.45 + randomNormal() * 0.45;
       player.ovr = clamp(Math.round(player.ovr + change), 55, 99);
       player.simOvr = player.ovr;
-      player.defense = clamp(Math.round(player.defense + change * 0.75), 50, 99);
+      evolveLeaguePlayerAttributes(player, player.ovr - beforeOvr, appliedInjuryDecline);
       const retirementChance = player.age >= 40 ? 1 : (player.age >= 36 ? 0.2 + (player.age - 36) * 0.18 + Math.max(0, 78 - player.ovr) * 0.035 : 0);
       if ((player.age >= 34 && player.ovr <= 68) || random() < retirementChance) {
         player.active = false;
@@ -1660,6 +1797,8 @@
       if (!Array.isArray(player.seasonHistory)) player.seasonHistory = [];
       if (player.seasonInjury === undefined) player.seasonInjury = null;
       if (player.seasonRole === undefined) player.seasonRole = null;
+      if (!player.ageSource) player.ageSource = Number.isFinite(player.rookieYear) ? 'draft-class' : 'legacy-estimate';
+      ensureLeaguePlayerAttributes(player);
       player.forcedRetirement = Boolean(player.forcedRetirement);
     });
     return state.career.league;
@@ -1786,7 +1925,24 @@
     const rotationTotals = Object.fromEntries(DATA.TEAMS.map(team => [team.id, league.players
       .filter(player => player.active && player.teamId === team.id)
       .reduce((sum, player) => sum + (player.seasonRole?.minutes || 0), 0)]));
-    app.innerHTML = `<section class="screen"><p class="step-label">LEAGUE DEBUG</p><h1>${eraKey} 纪元第 ${targetSeason} 季</h1><p class="subtitle">${DATA.seasonLabel(draftYear)} · ${rookies.length} 名新秀 · 累计 ${league.retiredCount} 人退役</p><div class="info-strip"><b>年龄范围</b> ${Math.min(...activeAges)}–${Math.max(...activeAges)} 岁</div><ol>${rookies.map(player => `<li>${player.draftOrder}. ${player.name} · ${player.age} 岁 · ${player.ovr}/${player.potential}</li>`).join('')}</ol><p>本次推进：${lastUpdate.retired} 人退役，${lastUpdate.rookies} 人入盟</p><pre id="league-audit">${JSON.stringify({ rosterSizes: audit.rosterSizes, duplicateIds: audit.duplicateIds, rotationTotals, activePlayers: league.players.filter(player => player.active).length, transactions: league.transactionHistory?.length || 0 })}</pre></section>`;
+    const activePlayers = league.players.filter(player => player.active);
+    const ageSources = activePlayers.reduce((result, player) => {
+      const source = player.ageSource || 'unknown';
+      result[source] = (result[source] || 0) + 1;
+      return result;
+    }, {});
+    const auditReport = {
+      rosterSizes: audit.rosterSizes,
+      duplicateIds: audit.duplicateIds,
+      rotationTotals,
+      activePlayers: activePlayers.length,
+      detailedAttributePlayers: activePlayers.filter(player => player.attrs && DATA.ATTRS.every(([key]) => Number.isFinite(player.attrs[key]))).length,
+      missingAges: activePlayers.filter(player => !Number.isFinite(player.age)).length,
+      ageSources,
+      currentRookies: rookies.length,
+      transactions: league.transactionHistory?.length || 0
+    };
+    app.innerHTML = `<section class="screen"><p class="step-label">LEAGUE DEBUG</p><h1>${eraKey} 纪元第 ${targetSeason} 季</h1><p class="subtitle">${DATA.seasonLabel(draftYear)} · ${rookies.length} 名新秀 · 累计 ${league.retiredCount} 人退役</p><div class="info-strip"><b>年龄范围</b> ${Math.min(...activeAges)}–${Math.max(...activeAges)} 岁</div><ol>${rookies.map(player => `<li>${player.draftOrder}. ${player.name} · ${player.age} 岁 · ${player.ovr}/${player.potential}</li>`).join('')}</ol><p>本次推进：${lastUpdate.retired} 人退役，${lastUpdate.rookies} 人入盟</p><pre id="league-audit">${JSON.stringify(auditReport)}</pre></section>`;
   }
 
   function simulateOneGame() {
@@ -1934,6 +2090,7 @@
   }
 
   function finishRegularSeason() {
+    if (state.season.stage !== 'regular') return;
     const league = ensureLeagueState();
     assignLeagueRotations(league);
     const strengths = Object.fromEntries(DATA.TEAMS.map(team => [team.id, teamStrength(team.id)]));
@@ -1957,7 +2114,7 @@
     else if (state.season.seed <= 10) state.season.postSeasonStage = 'playin';
     else state.season.postSeasonStage = 'ended';
     state.season.awards = buildSeasonAwards();
-    state.season.stage = 'awards';
+    transitionSeasonStage('awards');
   }
 
   function leagueSeasonProfiles() {
@@ -1972,18 +2129,25 @@
       const injury = player.seasonInjury;
       const games = injury?.seasonEnding ? injury.gamesPlayed : 82;
       const availability = games / 82;
-      const minuteScale = role.minutes / 32;
-      const usageScale = clamp(role.usage / 24, 0.5, 1.5);
-      const scoringBoost = { sniper: 3.4, creator: 2.2, slasher: 3, wing: 1.4, anchor: -4, big: -1.2, twoway: -0.8, pointbig: 0.8 }[player.archetype] || 0;
-      const passingBoost = { PG: 3.2, SG: 1.1, SF: 1, PF: 0.6, C: 0.9 }[player.pos] + (['creator', 'pointbig'].includes(player.archetype) ? 1.4 : 0);
-      const reboundingBoost = { PG: 0, SG: 0.7, SF: 2.1, PF: 4.3, C: 6.2 }[player.pos];
       const healthScale = injury?.type === 'light' ? clamp(1 - injury.penalty * injury.duration / 3000, 0.9, 1) : 1;
-      const pts = clamp((7.5 + (player.ovr - 70) * 0.58 + scoringBoost * 0.75 + Math.max(0, role.usage - 20) * 0.25 + randomNormal() * 1.5) * minuteScale * (0.78 + usageScale * 0.22) * healthScale, 2, 36);
-      const ast = clamp((1 + (player.ovr - 70) * 0.08 + passingBoost + randomNormal() * 0.6) * minuteScale * (0.82 + usageScale * 0.18) * healthScale, 0.5, 12.5);
-      const reb = clamp((2 + (player.ovr - 70) * 0.1 + reboundingBoost + randomNormal() * 0.8) * minuteScale * healthScale, 1, 15);
-      const stocks = clamp((0.5 + (player.defense - 60) * 0.045 + (['anchor', 'twoway'].includes(player.archetype) ? 1.1 : 0) + randomNormal() * 0.35) * minuteScale * healthScale, 0.2, 5.2);
+      const attrs = ensureLeaguePlayerAttributes(player);
+      const statProfile = SIM.calculateStatProfile({ attrs, position: player.pos, minutes: role.minutes, usage: role.usage, ovr: player.ovr });
+      const threeRateBase = { PG: 0.42, SG: 0.4, SF: 0.34, PF: 0.25, C: 0.14 }[player.pos] || 0.3;
+      const threeRate = clamp(threeRateBase + (attrs.threePT - 75) * 0.007, 0.05, 0.62);
+      const threeAttempts = statProfile.fga * threeRate;
+      const twoAttempts = statProfile.fga - threeAttempts;
+      const twoPct = clamp(0.38 + (attrs.FIN * 0.5 + attrs.MID * 0.3 + attrs.DNK * 0.2) / 100 * 0.22, 0.42, 0.67);
+      const threePct = clamp(0.24 + attrs.threePT / 100 * 0.2, 0.27, 0.46);
+      const freeThrows = clamp((attrs.FIN + attrs.ATH + role.usage) / 34, 1, 10);
+      const freeThrowPct = clamp(0.54 + (attrs.MID + attrs.CLU) / 200 * 0.3, 0.58, 0.92);
+      const pts = clamp((twoAttempts * twoPct * 2 + threeAttempts * threePct * 3 + freeThrows * freeThrowPct + randomNormal() * 1.2) * healthScale, 1, 40);
+      const ast = clamp((statProfile.ast + randomNormal() * 0.45) * healthScale, 0.2, 13);
+      const reb = clamp((statProfile.reb + randomNormal() * 0.55) * healthScale, 0.5, 16);
+      const stl = clamp((statProfile.stl + randomNormal() * 0.18) * healthScale, 0.1, 3.2);
+      const blk = clamp((statProfile.blk + randomNormal() * 0.18) * healthScale, 0, 4.2);
+      const stocks = stl + blk;
       const wins = league.teamRecords?.[player.teamId]?.wins ?? 41;
-      player.lastSeason = { seasonNumber: state.career.seasonNumber, pts: Number(pts.toFixed(1)), ast: Number(ast.toFixed(1)), reb: Number(reb.toFixed(1)), stocks: Number(stocks.toFixed(1)), wins, games, minutes: role.minutes, usage: role.usage, availability, injury: injury?.label || null };
+      player.lastSeason = { seasonNumber: state.career.seasonNumber, pts: Number(pts.toFixed(1)), ast: Number(ast.toFixed(1)), reb: Number(reb.toFixed(1)), stl: Number(stl.toFixed(1)), blk: Number(blk.toFixed(1)), stocks: Number(stocks.toFixed(1)), wins, games, minutes: role.minutes, usage: role.usage, availability, injury: injury?.label || null };
       return { ...player, ...player.lastSeason };
     });
     league.profileSeasonNumber = state.career.seasonNumber;
@@ -2042,7 +2206,7 @@
       { label: '常规赛得分王', short: 'SC', winner: userScoring ? '我' : scoring.name, detail: `场均 ${userScoring ? averages.pts : scoring.pts} 分`, isUser: userScoring },
       { label: '最佳阵容', short: 'ALL', winner: allNba === '未入选' ? '评选结果' : '我', detail: allNba, isUser: allNba !== '未入选' }
     ];
-    state.career.league.awardHistory.push({
+    state.career.league.awardHistory = STATE.upsertSeasonRecord(state.career.league.awardHistory, {
       seasonNumber: state.career.seasonNumber,
       mvp: awards[0].winner,
       dpoy: awards[1].winner,
@@ -2054,7 +2218,7 @@
 
   function continuePostseason() {
     if (state.season.stage !== 'awards') return;
-    state.season.stage = state.season.postSeasonStage;
+    if (!transitionSeasonStage(state.season.postSeasonStage)) return;
     if (state.season.stage === 'ended') state.season.ended = true;
     playTone(640, 0.08);
     renderSeason();
@@ -2085,18 +2249,18 @@
         const originalSeed = state.season.originalSeed || state.season.seed;
         if (playInStep === 1 && originalSeed <= 8 && won) {
           state.season.seed = 7;
-          state.season.stage = 'playoffs';
+          transitionSeasonStage('playoffs');
         } else if (playInStep === 1 && originalSeed <= 8 && !won) {
           state.season.playInStep = 2;
-          state.season.stage = 'playin';
+          transitionSeasonStage('playin');
         } else if (playInStep === 1 && originalSeed >= 9 && won) {
           state.season.playInStep = 2;
-          state.season.stage = 'playin';
+          transitionSeasonStage('playin');
         } else if (playInStep === 2 && won) {
           state.season.seed = 8;
-          state.season.stage = 'playoffs';
+          transitionSeasonStage('playoffs');
         } else {
-          state.season.stage = 'ended';
+          transitionSeasonStage('ended');
         }
         state.season.ended = state.season.stage === 'ended';
         playTone(won ? 720 : 220, 0.12);
@@ -2244,6 +2408,7 @@
 
   function finalizeSeriesSimulation() {
     const sim = state.season.seriesSimulation;
+    if (!sim || state.season.stage !== 'playoffs') return;
     const round = state.season.playoffRound;
     const won = sim.wins >= 4;
     const bracket = initializePostseasonBracket();
@@ -2259,11 +2424,11 @@
     state.season.series.push({ label: sim.label, opponent: sim.opponent, won, score: `${sim.wins}-${sim.losses}`, games: sim.games });
     state.season.seriesSimulation = null;
     if (!won) {
-      state.season.stage = 'ended';
+      transitionSeasonStage('ended');
       state.season.ended = true;
       playTone(210, 0.16);
     } else if (round >= 3) {
-      state.season.stage = 'champion';
+      transitionSeasonStage('champion');
       state.season.ended = true;
       state.season.champion = true;
       recordChampionship();
@@ -2563,7 +2728,7 @@
     state.career.retirementAge = pending.nextAge;
     state.career.age = pending.nextAge;
     state.career.pendingOffseason = null;
-    state.season.stage = 'career-complete';
+    transitionSeasonStage('career-complete');
     closeModal();
     renderSeason();
     saveGame();
@@ -2639,7 +2804,7 @@
       state.career.completed = true;
       state.career.retirementAge = state.career.age;
       if (state.career.seasonNumber >= CAREER_SEASONS) state.career.age = 38;
-      state.season.stage = 'career-complete';
+      transitionSeasonStage('career-complete');
       renderSeason();
       saveGame();
       return;
@@ -2681,21 +2846,40 @@
     if (totals.reb >= 15000) badges.push('篮板怪兽');
     if (totals.ast >= 10000) badges.push('组织大师');
     if (career.totalGames >= 1400) badges.push('钢铁之躯');
-    if (career.teamsPlayed.length === 1) badges.push('一人一城');
+    if (career.teamsPlayed.length === 1 && career.history.length >= 10 && career.totalGames >= 650) badges.push('一人一城');
     if (career.teamsPlayed.length >= 5) badges.push('联盟旅人');
     if (career.history.some(entry => entry.age >= 35 && entry.ovr >= 88)) badges.push('逆龄传奇');
     if (!career.championships && score >= 58) badges.push('无冕之王');
     if (Number(average.pts) >= 27) badges.push('得分机器');
     if (Number(average.stl) + Number(average.blk) >= 3 && Number(average.pts) >= 20) badges.push('攻防一体');
-    if (!badges.length) badges.push(highLevelSeasons >= 8 ? '长青支柱' : '职业典范');
+    if (!badges.length) {
+      if (tier.top30) badges.push('时代传奇');
+      else if (career.history.length <= 4) badges.push('新秀合同限定');
+      else if (legacy.careerPpg < 5) badges.push('得分个位数');
+      else if (career.peakOVR < 70) badges.push('板凳观察员');
+      else badges.push(highLevelSeasons >= 8 ? '长青支柱' : '普通打工人');
+    }
     const strongest = Object.entries(dimensions).sort((left, right) => right[1] - left[1])[0];
     const weakest = Object.entries(dimensions).sort((left, right) => left[1] - right[1])[0];
-    const copy = `我的生涯历史评分为 ${score} 分。巅峰达到 ${career.peakOVR} OVR，累计 ${Math.round(totals.pts).toLocaleString()} 分、${Math.round(totals.reb).toLocaleString()} 个篮板和 ${Math.round(totals.ast).toLocaleString()} 次助攻；${career.championships} 次夺冠、${mvp} 次 MVP、${allNba} 次入选最佳阵容。${strongest[0]}是最有说服力的历史资本。`;
+    const formalCopy = `我的生涯历史评分为 ${score} 分。巅峰达到 ${career.peakOVR} OVR，累计 ${Math.round(totals.pts).toLocaleString()} 分、${Math.round(totals.reb).toLocaleString()} 个篮板和 ${Math.round(totals.ast).toLocaleString()} 次助攻；${career.championships} 次夺冠、${mvp} 次 MVP、${allNba} 次入选最佳阵容。${strongest[0]}是最有说服力的历史资本。`;
+    let copy = formalCopy;
+    if (!tier.top30 && career.history.length <= 4 && legacy.careerPpg < 5) {
+      copy = `我的联盟生涯只维持了 ${career.history.length} 个赛季，场均 ${legacy.careerPpg.toFixed(1)} 分，巅峰仅 ${career.peakOVR} OVR。与其说留下了历史地位，不如说成功让联盟档案系统多了一条记录。`;
+    } else if (!tier.top30 && legacy.careerPpg < 5) {
+      copy = `我打了 ${career.history.length} 个赛季，场均 ${legacy.careerPpg.toFixed(1)} 分。职业态度或许值得肯定，但比赛贡献主要体现在让主力得到喘息时间。`;
+    } else if (!tier.top30 && career.totalGames < 200) {
+      copy = `我的生涯停在 ${career.totalGames} 场，巅峰 ${career.peakOVR} OVR。球迷还没来得及记住球衣号码，履历已经进入总结环节。`;
+    } else if (!tier.top30 && !allNba && !career.championships) {
+      copy = `${formalCopy}不过没有最佳阵容和冠军背书，所谓历史地位基本只存在于我自己的退役演讲里。`;
+    }
     const gateNotes = [];
     if (!mvp) gateNotes.push('缺少 MVP');
     if (!career.championships) gateNotes.push('缺少总冠军');
     if (allNba < 4) gateNotes.push('最佳阵容履历不足');
-    const caveat = gateNotes.length
+    const lowCareerEvidence = career.history.length <= 4 || legacy.careerPpg < 5 || career.peakOVR < 70;
+    const caveat = lowCareerEvidence
+      ? `仅完成 ${career.history.length} 个赛季、${career.totalGames} 场比赛，场均 ${legacy.careerPpg.toFixed(1)} 分，巅峰 ${career.peakOVR} OVR；这份履历首先需要证明自己属于稳定轮换，再谈历史排名。`
+      : gateNotes.length
       ? `${gateNotes.join('、')}，历史档位因此受到硬性限制；当前最需要补强的是${weakest[0]}。`
       : (weakest[1] >= 70 ? '评价没有明显短板，巅峰、积累与团队成绩形成了完整闭环。' : `${weakest[0]}是历史排名中的主要争议项。`);
     return { score, rawScore: legacy.rawScore, title: tier.title, rank: tier.rank, badges: badges.slice(0, 6), dimensions, copy, caveat };
@@ -2849,6 +3033,9 @@
     const completedSeasons = career.history.length;
     const retirementAge = career.retirementAge || career.age || 38;
     const awards = Object.entries(career.awardCounts).sort((left, right) => right[1] - left[1]);
+    const noAwardsCopy = completedSeasons <= 4
+      ? `主要荣誉栏同样提前下班：${completedSeasons} 个赛季未获得联盟主要个人奖项。`
+      : `征战 ${completedSeasons} 个赛季，未获得联盟主要个人奖项。`;
     return `
       <section class="career-summary">
         <div class="career-summary-hero"><span>RETIREMENT · AGE ${retirementAge}</span><h1>${standing.title}</h1><p>${standing.rank} · 历史评分 ${standing.score}</p></div>
@@ -2866,7 +3053,7 @@
           <div><b>${averages.pts}</b><span>得分</span></div><div><b>${averages.reb}</b><span>篮板</span></div><div><b>${averages.ast}</b><span>助攻</span></div>
           <div><b>${averages.stl}</b><span>抢断</span></div><div><b>${averages.blk}</b><span>盖帽</span></div><div><b>${averages.fgPct}%</b><span>命中率</span></div>
         </div></section>
-        <section class="career-retirement-panel"><h2>主要荣誉</h2><div class="retirement-awards">${awards.length ? awards.map(([label, count]) => `<div><b>${count}</b><span>${label}</span></div>`).join('') : '<p>二十年稳定征战，未获得联盟主要个人奖项。</p>'}</div></section>
+        <section class="career-retirement-panel"><h2>主要荣誉</h2><div class="retirement-awards">${awards.length ? awards.map(([label, count]) => `<div><b>${count}</b><span>${label}</span></div>`).join('') : `<p>${noAwardsCopy}</p>`}</div></section>
         <div class="season-actions"><button class="secondary-btn" type="button" data-action="career-history">查看逐季履历</button><button class="secondary-btn" type="button" data-action="honors">荣誉墙</button><button class="primary-btn" type="button" data-action="restart">开启新生涯</button></div>
       </section>`;
   }
@@ -3249,9 +3436,15 @@
   }
 
   function saveGame() {
-    if (debugCareerMode) return;
+    if (debugCareerMode || !STATE.hasMeaningfulProgress(state)) return;
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...state, schemaVersion: SAVE_SCHEMA_VERSION, selectedPlayer: state.selectedPlayer ? { name: state.selectedPlayer.name, teamId: state.selectedPlayer.teamId } : null }));
+      const snapshot = STATE.createSaveSnapshot(state, SAVE_SCHEMA_VERSION);
+      const serialized = JSON.stringify(snapshot);
+      localStorage.setItem(SAVE_TEMP_KEY, serialized);
+      if (!STATE.parseSave(localStorage.getItem(SAVE_TEMP_KEY), SAVE_SCHEMA_VERSION)) throw new Error('Save verification failed');
+      localStorage.setItem(SAVE_KEY, serialized);
+      localStorage.removeItem(SAVE_TEMP_KEY);
+      state.savedAt = snapshot.savedAt;
       LEGACY_SAVE_KEYS.forEach(key => localStorage.removeItem(key));
     } catch (error) {
       showToast('当前浏览器无法保存进度');
@@ -3260,16 +3453,75 @@
 
   function loadStoredGame() {
     try {
-      const current = localStorage.getItem(SAVE_KEY);
-      if (current) return JSON.parse(current);
-      for (const key of LEGACY_SAVE_KEYS) {
-        const legacy = localStorage.getItem(key);
-        if (legacy) return { ...JSON.parse(legacy), schemaVersion: 3 };
-      }
+      const candidates = [
+        { source: 'current', value: localStorage.getItem(SAVE_KEY) },
+        { source: 'temporary', value: localStorage.getItem(SAVE_TEMP_KEY) },
+        { source: 'backup', value: localStorage.getItem(SAVE_BACKUP_KEY) },
+        ...LEGACY_SAVE_KEYS.map(key => ({ source: key, value: localStorage.getItem(key) }))
+      ];
+      const result = STATE.selectStoredSave(candidates, SAVE_SCHEMA_VERSION);
+      lastStoredSource = result.source;
+      lastStoredRecovered = result.recovered || result.source === 'temporary';
+      return result.state;
+    } catch (error) {
+      lastStoredSource = null;
+      lastStoredRecovered = false;
       return null;
+    }
+  }
+
+  function loadBackupGame() {
+    try {
+      return STATE.parseSave(localStorage.getItem(SAVE_BACKUP_KEY), SAVE_SCHEMA_VERSION);
     } catch (error) {
       return null;
     }
+  }
+
+  function preserveCurrentSaveAsBackup() {
+    try {
+      const candidates = [
+        { source: 'current', value: localStorage.getItem(SAVE_KEY) },
+        ...LEGACY_SAVE_KEYS.map(key => ({ source: key, value: localStorage.getItem(key) }))
+      ];
+      const saved = STATE.selectStoredSave(candidates, SAVE_SCHEMA_VERSION).state;
+      if (!STATE.hasMeaningfulProgress(saved)) return false;
+      localStorage.setItem(SAVE_BACKUP_KEY, JSON.stringify(STATE.createSaveSnapshot(saved, SAVE_SCHEMA_VERSION)));
+      return true;
+    } catch (error) {
+      showToast('旧进度备份失败，未开始新游戏');
+      return false;
+    }
+  }
+
+  function requestRestoreBackup() {
+    const backup = loadBackupGame();
+    if (!STATE.hasMeaningfulProgress(backup)) return;
+    modalRoot.innerHTML = `
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title">
+        <header class="modal-head"><div><span class="modal-kicker">SAVE BACKUP</span><h2 id="restore-title">恢复旧生涯？</h2></div><button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">×</button></header>
+        <div class="modal-body">
+          <p class="confirm-copy">将恢复“${savedProgressLabel(backup)}”。当前进度会与备份交换，因此仍可再次恢复。</p>
+          <div class="confirm-actions">
+            <button class="secondary-btn" type="button" data-action="close-modal">取消</button>
+            <button class="primary-btn" type="button" data-action="confirm-restore-backup">确认恢复</button>
+          </div>
+        </div>
+      </section>`;
+  }
+
+  function confirmRestoreBackup() {
+    const backupRaw = localStorage.getItem(SAVE_BACKUP_KEY);
+    const backup = STATE.parseSave(backupRaw, SAVE_SCHEMA_VERSION);
+    if (!STATE.hasMeaningfulProgress(backup)) return;
+    const current = loadStoredGame();
+    if (STATE.hasMeaningfulProgress(current) && lastStoredSource !== 'backup') {
+      localStorage.setItem(SAVE_BACKUP_KEY, JSON.stringify(STATE.createSaveSnapshot(current, SAVE_SCHEMA_VERSION)));
+    }
+    localStorage.setItem(SAVE_KEY, JSON.stringify(STATE.createSaveSnapshot(backup, SAVE_SCHEMA_VERSION)));
+    closeModal();
+    continueGame();
+    showToast('已恢复备份进度');
   }
 
   function hydrateSeasonTotals() {
@@ -3309,10 +3561,12 @@
   function continueGame() {
     const saved = loadStoredGame();
     if (!saved || (!saved.resumeScreen && saved.screen === 'home')) return;
+    const recoveredSave = lastStoredRecovered;
     state = { ...freshState(), ...saved, sound: state.sound };
     state.schemaVersion = SAVE_SCHEMA_VERSION;
     state.eraKey = saved.eraKey || saved.career?.eraKey || 'current';
     DATA.setEra(state.eraKey);
+    if (state.eraKey === 'current' && state.career?.startYear === 2025) state.career.startYear = 2026;
     if (state.career && !Number.isFinite(state.career.startYear)) state.career.startYear = DATA.getEra(state.eraKey).startYear;
     if (state.position && Object.keys(state.attrs || {}).length) state.archetype = findArchetype();
     if (state.season) hydrateSeasonTotals();
@@ -3338,6 +3592,7 @@
       if (!Number.isFinite(state.career.minutesPenaltyNextSeason)) state.career.minutesPenaltyNextSeason = 0;
       state.career.forcedRetirement = Boolean(state.career.forcedRetirement);
       const league = ensureLeagueState();
+      if (state.eraKey === 'current' && league.startYear === 2025) league.startYear = 2026;
       if (state.eraKey === 'current') {
         const currentPlayers = Object.values(DATA.PLAYERS).flat();
         const initialSeasonOffset = Math.max(0, state.career.seasonNumber - 1);
@@ -3372,6 +3627,7 @@
     if (state.career?.pendingOffseason?.type === 'free-agency') showFreeAgencyModal();
     if (state.career?.pendingOffseason?.type === 'involuntary-trade') showMovementResultModal(state.career.pendingOffseason.movement, true);
     if (!state.career?.pendingOffseason && state.career?.pendingDevelopmentReview) showDevelopmentModal(state.career.pendingDevelopmentReview);
+    if (recoveredSave) showToast('主存档异常，已从安全副本恢复');
   }
 
   function showToast(message) {
@@ -3415,7 +3671,7 @@
   }
 
   function handleAction(action, element) {
-    if (action === 'start') startGame('current');
+    if (action === 'start') requestNewGame('current');
     if (action === 'era-mode') showScreen('era');
     if (action === 'help') showHelp(0);
     if (action === 'honors') showScreen('honors');
@@ -3424,7 +3680,10 @@
     if (action === 'close-modal') closeModal();
     if (action === 'confirm-lock') confirmLock(element.dataset.attribute);
     if (action === 'career') showScreen('career');
-    if (action === 'restart') startGame(state.eraKey || 'current');
+    if (action === 'restart') requestNewGame(state.eraKey || 'current');
+    if (action === 'confirm-new-game') confirmNewGame(element.dataset.era);
+    if (action === 'restore-backup') requestRestoreBackup();
+    if (action === 'confirm-restore-backup') confirmRestoreBackup();
     if (action === 'next-game') simulateNextGame();
     if (action === 'all-games') simulateAllGames();
     if (action === 'continue-postseason') continuePostseason();
@@ -3450,7 +3709,7 @@
     const positionEl = event.target.closest('[data-position]');
     if (positionEl) selectPosition(positionEl.dataset.position);
     const eraEl = event.target.closest('[data-era]');
-    if (eraEl) startGame(eraEl.dataset.era);
+    if (eraEl) requestNewGame(eraEl.dataset.era);
     const playerEl = event.target.closest('[data-player]');
     if (playerEl) selectPlayer(playerEl.dataset.player);
     const attributeEl = event.target.closest('[data-attribute]');
@@ -3493,7 +3752,7 @@
   const draftDebugSeason = Number(debugParams.get('season'));
   const injuryDebug = debugParams.get('injuryOutcome');
   const tradeDebug = debugParams.get('tradeTest') === '1';
-  const legacyDebug = debugParams.get('legacyTest') === '1';
+  const legacyDebug = debugParams.get('legacyTest');
   const offseasonDebug = debugParams.get('offseasonTest');
   const isLocalDebug = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
   if (isLocalDebug) {
@@ -3508,10 +3767,20 @@
           league.players.filter(player => player.active && player.teamId === team.id)
             .reduce((sum, player) => sum + (player.seasonRole?.minutes || 0), 0)
         ]));
+        const activePlayers = league.players.filter(player => player.active);
+        const ageSources = activePlayers.reduce((result, player) => {
+          const source = player.ageSource || 'unknown';
+          result[source] = (result[source] || 0) + 1;
+          return result;
+        }, {});
         return {
           ...audit,
-          activePlayers: league.players.filter(player => player.active).length,
+          activePlayers: activePlayers.length,
           userPlayers: league.players.filter(player => player.active && player.isUser).length,
+          detailedAttributePlayers: activePlayers.filter(player => player.attrs && DATA.ATTRS.every(([key]) => Number.isFinite(player.attrs[key]))).length,
+          missingAges: activePlayers.filter(player => !Number.isFinite(player.age)).length,
+          ageSources,
+          currentRookies: activePlayers.filter(player => player.seasons === 0).length,
           rotationTotals,
           transactionCount: league.transactionHistory?.length || 0,
           retiredCount: league.retiredCount || 0,
@@ -3520,12 +3789,12 @@
       }
     };
   }
-  if (isLocalDebug && ['2003', '2009'].includes(draftDebug) && draftDebugSeason >= 1 && draftDebugSeason <= CAREER_SEASONS) {
+  if (isLocalDebug && ['current', '2003', '2009'].includes(draftDebug) && draftDebugSeason >= 1 && draftDebugSeason <= CAREER_SEASONS) {
     debugCareerMode = true;
     renderDraftDebug(draftDebug, draftDebugSeason);
   } else if (isLocalDebug && ['2003', '2009'].includes(eraDebug)) {
     debugCareerMode = true;
-    startGame(eraDebug);
+    beginNewGame(eraDebug);
   } else if (isLocalDebug && POSITION_ARCHETYPES[archetypeDebug]) {
     debugCareerMode = true;
     activateArchetypeDebugState(archetypeDebug);
@@ -3542,6 +3811,9 @@
     debugCareerMode = true;
     activateInjuryDebugState(injuryDebug);
     renderSeason();
+  } else if (isLocalDebug && legacyDebug === 'low') {
+    debugCareerMode = true;
+    activateLowLegacyDebugState();
   } else if (isLocalDebug && [1, 15, 20].includes(debugSeason)) {
     debugCareerMode = true;
     state = buildDebugCareerState(debugSeason);
@@ -3554,7 +3826,7 @@
       state.career.contract.yearsRemaining = offseasonDebug === 'freeagency' ? 1 : 2;
       advanceCareer();
     }
-    if (legacyDebug && debugSeason === 20) advanceCareer();
+    if (legacyDebug === '1' && debugSeason === 20) advanceCareer();
   } else {
     renderHome();
   }

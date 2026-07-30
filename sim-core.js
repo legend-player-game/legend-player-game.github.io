@@ -290,6 +290,10 @@
     const peakOvr = Number(career?.peakOVR) || 60;
     const totalGames = Number(career?.totalGames) || 0;
     const seasonCount = Math.max(1, history.length);
+    const careerPpg = totalGames > 0 ? (Number(totals.pts) || 0) / totalGames : 0;
+    const careerMpg = totalGames > 0
+      ? history.reduce((sum, season) => sum + (Number(season.averages?.min) || 0) * (Number(season.games) || 0), 0) / totalGames
+      : 0;
     const topFiveOvr = history.slice().sort((left, right) => right.ovr - left.ovr).slice(0, 5)
       .reduce((sum, season) => sum + season.ovr, 0) / Math.max(1, Math.min(5, history.length));
     const peakRating = ratingFromMilestones(peakOvr, [[0, 0], [75, 10], [80, 25], [85, 45], [90, 65], [95, 82], [99, 94]]);
@@ -326,18 +330,22 @@
     if (!mvp && !championships) score = Math.min(score, 76);
     const majorAwards = mvp + dpoy;
     const tiers = [
-      { threshold: 95, title: '历史王座候选', rank: '历史前 3 讨论', eligible: mvp >= 3 && championships >= 3 && allNba >= 12 && peakOvr >= 96 },
-      { threshold: 89, title: '不朽传奇', rank: '历史前 10 级别', eligible: mvp >= 2 && championships >= 2 && allNba >= 10 },
-      { threshold: 83, title: '时代统治者', rank: '历史前 25 级别', eligible: (mvp >= 2 || (mvp >= 1 && championships >= 1)) && allNba >= 8 },
+      { threshold: 95, title: '历史王座候选', rank: '历史前 3 讨论', top30: true, eligible: mvp >= 3 && championships >= 3 && allNba >= 12 && peakOvr >= 96 },
+      { threshold: 89, title: '不朽传奇', rank: '历史前 10 级别', top30: true, eligible: mvp >= 2 && championships >= 2 && allNba >= 10 },
+      { threshold: 83, title: '时代统治者', rank: '历史前 25 级别', top30: true, eligible: (mvp >= 2 || (mvp >= 1 && championships >= 1)) && allNba >= 8 },
       { threshold: 76, title: '名人堂超级巨星', rank: '历史前 50 级别', eligible: ((majorAwards >= 1 && championships >= 1) || mvp >= 2) && allNba >= 6 },
       { threshold: 68, title: '名人堂巨星', rank: '历史前 75 讨论', eligible: allNba >= 7 && (majorAwards >= 1 || championships >= 1) },
       { threshold: 58, title: '名人堂球星', rank: '名人堂级别（非历史前 75）', eligible: allNba >= 4 || majorAwards >= 1 || championships >= 1 },
       { threshold: 50, title: '多届最佳阵容球员', rank: '时代代表球星', eligible: allNba >= 2 || majorAwards >= 1 },
-      { threshold: 42, title: '全明星级生涯', rank: '优秀核心球员', eligible: true },
-      { threshold: 0, title: '可靠职业球员', rank: '长期轮换与首发级别', eligible: true }
+      { threshold: 42, title: '全明星级生涯', rank: '有过高光，离历史前列还有几个档位', eligible: seasonCount >= 5 && (allNba >= 1 || peakOvr >= 90) },
+      { threshold: 34, title: '球队核心', rank: '能扛一段时间的球权，扛不起历史讨论', eligible: seasonCount >= 6 && totalGames >= 350 && (careerPpg >= 15 || peakOvr >= 88) },
+      { threshold: 24, title: '合格首发', rank: '首发履历够用，退役巡演就先省了', eligible: totalGames >= 350 && careerMpg >= 24 },
+      { threshold: 14, title: '稳定轮换球员', rank: '轮换里有位置，历史榜单里没有', eligible: seasonCount >= 5 && totalGames >= 220 && (careerMpg >= 15 || careerPpg >= 6) },
+      { threshold: 7, title: '联盟边缘球员', rank: '名单上出现过，比赛里不一定找得到', eligible: totalGames >= 50 },
+      { threshold: 0, title: '未能站稳联盟', rank: '短暂联盟经历，生涯比重建计划结束得更早', eligible: true }
     ];
     const tier = tiers.find(item => score >= item.threshold && item.eligible) || tiers[tiers.length - 1];
-    return { score, rawScore, dimensions, tier, productionRatings, qualityUnits };
+    return { score, rawScore, dimensions, tier, productionRatings, qualityUnits, careerPpg, careerMpg, seasonCount, totalGames };
   }
 
   function auditLeague(teams, players, records) {

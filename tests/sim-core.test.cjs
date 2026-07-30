@@ -212,3 +212,50 @@ test('historical tiers require awards and winning gates', () => {
   assert.ok(legacy.score >= 89);
   assert.match(legacy.tier.rank, /历史前/);
 });
+
+test('a short low-production career is not called reliable', () => {
+  const history = Array.from({ length: 4 }, (_, index) => ({
+    seasonNumber: index + 1,
+    age: 18 + index,
+    ovr: 45 + index,
+    games: 82,
+    wins: 24,
+    averages: { min: 8.2 },
+    champion: false,
+    postseason: '无缘季后赛'
+  }));
+  const legacy = SIM.calculateCareerLegacy({
+    history,
+    totals: { pts: 912, reb: 287, ast: 333 },
+    awardCounts: {},
+    championships: 0,
+    peakOVR: 48,
+    totalGames: 328
+  });
+  assert.equal(legacy.tier.title, '未能站稳联盟');
+  assert.equal(legacy.tier.top30, undefined);
+  assert.ok(legacy.careerPpg < 3);
+});
+
+test('top 25 historical careers stay in the formal commentary group', () => {
+  const history = Array.from({ length: 15 }, (_, index) => ({
+    seasonNumber: index + 1,
+    age: 18 + index,
+    ovr: 96,
+    games: 80,
+    wins: 58,
+    averages: { min: 36 },
+    champion: index < 2,
+    postseason: index < 2 ? '总冠军' : '分区决赛止步'
+  }));
+  const legacy = SIM.calculateCareerLegacy({
+    history,
+    totals: { pts: 36000, reb: 9000, ast: 8500 },
+    awardCounts: { '最有价值球员': 2, '最佳阵容': 12, '常规赛得分王': 3 },
+    championships: 2,
+    peakOVR: 98,
+    totalGames: 1200
+  });
+  assert.equal(legacy.tier.top30, true);
+  assert.match(legacy.tier.rank, /历史前 (3|10|25)/);
+});

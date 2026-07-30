@@ -168,7 +168,7 @@
     return value;
   }
 
-  const PLAYER_ATTRIBUTE_OVERRIDES = {
+  const CURRENT_PLAYER_ATTRIBUTE_OVERRIDES = {
     '斯蒂芬-库里': { threePT: 99, MID: 94, HAN: 97, PAS: 91, CLU: 98, REB: 48, BLK: 40, STR: 55 },
     '斯蒂芬·库里': { threePT: 99, MID: 94, HAN: 97, PAS: 91, CLU: 98, REB: 48, BLK: 40, STR: 55 },
     '卢卡-东契奇': { threePT: 88, MID: 91, FIN: 96, DNK: 75, HAN: 96, PAS: 97, PDEF: 70, IDEF: 68, BLK: 45, REB: 84, ATH: 82, STR: 86, CLU: 96 },
@@ -178,6 +178,21 @@
     '维克托-文班亚马': { threePT: 84, MID: 87, FIN: 95, DNK: 96, HAN: 80, PAS: 82, PDEF: 83, IDEF: 96, BLK: 99, REB: 92, ATH: 88, STR: 86, CLU: 90 },
     '谢伊-吉尔杰斯-亚历山大': { threePT: 84, MID: 97, FIN: 98, DNK: 85, HAN: 97, PAS: 90, PDEF: 88, IDEF: 65, BLK: 64, REB: 72, ATH: 91, STR: 75, CLU: 98 },
     '杨瀚森': { threePT: 63, MID: 68, FIN: 72, DNK: 70, HAN: 58, PAS: 71, PDEF: 54, IDEF: 72, BLK: 75, REB: 76, ATH: 63, STR: 72, CLU: 62 }
+  };
+
+  const ERA_ATTRIBUTE_OVERRIDES = {
+    '2003': {
+      '科比布莱恩特': { threePT: 86, MID: 96, FIN: 95, DNK: 92, HAN: 96, PAS: 84, PDEF: 91, IDEF: 67, BLK: 60, REB: 70, ATH: 96, STR: 82, CLU: 97 },
+      '勒布朗詹姆斯': { threePT: 68, MID: 73, FIN: 91, DNK: 94, HAN: 84, PAS: 84, PDEF: 75, IDEF: 70, BLK: 72, REB: 78, ATH: 97, STR: 88, CLU: 82 },
+      '凯文加内特': { threePT: 72, MID: 96, FIN: 94, DNK: 91, HAN: 80, PAS: 84, PDEF: 95, IDEF: 98, BLK: 94, REB: 97, ATH: 92, STR: 91, CLU: 95 },
+      '沙奎尔奥尼尔': { threePT: 40, MID: 62, FIN: 99, DNK: 99, HAN: 68, PAS: 78, PDEF: 65, IDEF: 94, BLK: 93, REB: 97, ATH: 85, STR: 99, CLU: 94 }
+    },
+    '2009': {
+      '科比布莱恩特': { threePT: 88, MID: 98, FIN: 96, DNK: 90, HAN: 97, PAS: 86, PDEF: 93, IDEF: 68, BLK: 58, REB: 73, ATH: 94, STR: 83, CLU: 99 },
+      '勒布朗詹姆斯': { threePT: 79, MID: 88, FIN: 99, DNK: 99, HAN: 94, PAS: 92, PDEF: 94, IDEF: 86, BLK: 87, REB: 89, ATH: 99, STR: 97, CLU: 96 },
+      '斯蒂芬库里': { threePT: 91, MID: 88, FIN: 78, DNK: 48, HAN: 88, PAS: 84, PDEF: 66, IDEF: 42, BLK: 40, REB: 53, ATH: 79, STR: 50, CLU: 86 },
+      '德怀特霍华德': { threePT: 40, MID: 60, FIN: 98, DNK: 99, HAN: 64, PAS: 68, PDEF: 72, IDEF: 98, BLK: 98, REB: 99, ATH: 96, STR: 98, CLU: 91 }
+    }
   };
 
   const POSITION_ATTRIBUTE_BASELINES = {
@@ -208,9 +223,11 @@
     return name.replace(/[\s·\-.]/g, '');
   }
 
-  function getPlayerAttributeOverrides(name) {
-    return PLAYER_ATTRIBUTE_OVERRIDES[name] || Object.entries(PLAYER_ATTRIBUTE_OVERRIDES)
-      .find(([playerName]) => normalizePlayerName(playerName) === normalizePlayerName(name))?.[1] || {};
+  function getPlayerAttributeOverrides(name, eraKey = 'current') {
+    const normalized = normalizePlayerName(name);
+    if (String(eraKey) !== 'current') return ERA_ATTRIBUTE_OVERRIDES[String(eraKey)]?.[normalized] || {};
+    return CURRENT_PLAYER_ATTRIBUTE_OVERRIDES[name] || Object.entries(CURRENT_PLAYER_ATTRIBUTE_OVERRIDES)
+      .find(([playerName]) => normalizePlayerName(playerName) === normalized)?.[1] || {};
   }
 
   function getPlayerPositions(name, primaryPosition) {
@@ -259,19 +276,40 @@
     '小贾伦杰克逊': { age: 25, rookieYear: 2018 }
   };
 
+  function canonicalMetadataName(name) {
+    return normalizePlayerName(name)
+      .replace('塔特姆', '塔图姆')
+      .replace(/(二世|三世|四世)$/, '')
+      .replace(/^小/, '');
+  }
+
   function draftMetadata(name) {
-    const normalized = normalizePlayerName(name).replace('塔特姆', '塔图姆');
+    const normalized = canonicalMetadataName(name);
     const classes = window.NBA_ERA_DATA?.draftClasses || {};
     for (const [year, prospects] of Object.entries(classes)) {
-      if (prospects.some(prospect => normalizePlayerName(prospect.name) === normalized)) {
+      const prospect = prospects.find(item => canonicalMetadataName(item.name) === normalized);
+      if (prospect) {
         const rookieYear = Number(year);
-        return { rookieYear, age: 19 + CURRENT_ERA_START_YEAR - rookieYear };
+        return { rookieYear, age: (Number(prospect.age) || 19) + CURRENT_ERA_START_YEAR - rookieYear, ageSource: 'draft-class' };
       }
     }
     return null;
   }
 
-  const CURRENT_ERA_START_YEAR = 2025;
+  const CURRENT_ERA_START_YEAR = 2026;
+
+  function estimatedCurrentMetadata(ovr, potential) {
+    const upside = Math.max(0, (potential ?? ovr) - ovr);
+    let age = 26;
+    if (upside >= 9) age = 19;
+    else if (upside >= 7) age = 21;
+    else if (upside >= 5) age = 23;
+    else if (upside >= 3) age = 25;
+    else if (ovr >= 88) age = 29;
+    else if (upside <= 0) age = 30;
+    const rookieYear = CURRENT_ERA_START_YEAR - Math.max(0, age - 20);
+    return { age, rookieYear, ageSource: 'estimated' };
+  }
 
   const ERA_RATING_OVERRIDES = {
     '2003': {
@@ -328,7 +366,8 @@
     const calibratedPotential = Math.max(potential ?? calibratedOvr, calibratedOvr);
     const profile = ARCHETYPES[archetype];
     const hash = hashName(name);
-    const overrides = getPlayerAttributeOverrides(name);
+    const effectiveEraKey = currentRoster ? 'current' : String(eraKey || 'current');
+    const overrides = getPlayerAttributeOverrides(name, effectiveEraKey);
     const positions = getPlayerPositions(name, listedPosition);
     const pos = positions[0];
     const generatedCeiling = Math.min(99, calibratedOvr + 6);
@@ -346,19 +385,31 @@
     const attributeOvr = Math.round(ATTRS.reduce((sum, [key], index) => (
       sum + (attrs[key] || 0) * POSITION_WEIGHTS[pos][index]
     ), 0));
-    // Source OVR, plus any era calibration, remains the rating anchor. Attributes only
-    // make a small internal adjustment so archetype generation cannot inflate ratings.
-    const simOvr = Math.max(calibratedOvr - 2, Math.min(calibratedOvr + 2, Math.round(calibratedOvr * 0.85 + attributeOvr * 0.15)));
+    // Public and simulated OVR share one canonical value. Detailed attributes shape
+    // performance without silently changing the rating shown to the player.
+    const simOvr = calibratedOvr;
+    const knownMetadata = CURRENT_PLAYER_METADATA[normalizePlayerName(name)];
     const metadata = currentRoster
-      ? (CURRENT_PLAYER_METADATA[normalizePlayerName(name)] || draftMetadata(name))
+      ? (knownMetadata
+        ? { ...knownMetadata, age: knownMetadata.age + 1, ageSource: 'verified' }
+        : (draftMetadata(name) || estimatedCurrentMetadata(calibratedOvr, calibratedPotential)))
       : null;
     return {
       name, pos, positions, archetype, archetypeLabel: profile.label, ovr: calibratedOvr, sourceOvr: calibratedOvr,
       attributeOvr, simOvr, teamId,
       age: age ?? metadata?.age,
       rookieYear: rookieYear ?? metadata?.rookieYear,
+      ageSource: age != null ? 'era-roster' : metadata?.ageSource,
       ...attrs
     };
+  }
+
+  function createPlayerSnapshot({ name, pos, archetype, ovr, potential, eraKey = activeEra.key }) {
+    return createPlayer(null, [name, pos, archetype, ovr, potential], false, eraKey);
+  }
+
+  function calculateAttributeOverall(attrs, position) {
+    return Math.round(ATTRS.reduce((sum, [key], index) => sum + (attrs[key] || 0) * POSITION_WEIGHTS[position][index], 0));
   }
 
   const ACTIVE_ROSTER_SEEDS = window.NBA_ROSTER_SEEDS || Object.fromEntries(
@@ -376,8 +427,8 @@
   const CURRENT_ERA = {
     key: 'current',
     label: '现役模式',
-    startYear: 2025,
-    seasonLabel: '2025-26',
+    startYear: 2026,
+    seasonLabel: '2026-27',
     teams: TEAMS
   };
   let activeEra = CURRENT_ERA;
@@ -448,6 +499,8 @@
     setEra,
     getEra,
     getDraftClass,
+    createPlayerSnapshot,
+    calculateAttributeOverall,
     seasonLabel,
     getTeam,
     grade
