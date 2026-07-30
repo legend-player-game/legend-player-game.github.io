@@ -722,7 +722,8 @@
         currentOVR: state.finalOVR,
         peakOVR: state.finalOVR,
         potential: clamp(state.attrs.POT, 40, 99),
-        contract: { yearsRemaining: 4, totalYears: 4, annualSalary: rookieSalary },
+        contract: { yearsRemaining: 4, totalYears: 4, annualSalary: rookieSalary, type: 'rookie', number: 1 },
+        completedContracts: 0,
         history: [],
         transactions: [{
           season: 1,
@@ -1304,6 +1305,9 @@
     const marketValue = SIM.contractMarketValue({ ovr: state.finalOVR, age, potential: state.career.potential, availability });
     const forcedMarket = localDebugParam('marketOutcome');
     if (forcedMarket === 'none') return [];
+    const isRookieExtension = state.career.contract?.type === 'rookie'
+      || ((state.career.contract?.number ?? 1) === 1 && (state.career.completedContracts ?? 0) === 0);
+    const rookieRightsOffer = isRookieExtension && state.finalOVR >= 68 && !state.career.forcedRetirement;
     const candidates = DATA.TEAMS.map(team => {
       const context = teamMarketContext(team.id);
       const need = teamPositionNeed(league, team.id, leaguePlayerPositions(user), user.id);
@@ -1311,12 +1315,14 @@
       const motherBonus = team.id === state.career.currentTeam
         ? 4 + (state.career.teamRelationships[team.id] ?? 55) * 0.08 + userTeamLegacy(team.id).score * 0.035
         : 0;
-      const score = marketValue + need * 0.38 + strategyFit + motherBonus + randomNormal() * (waitRound ? 4 : 7);
+      const rightsBonus = rookieRightsOffer && team.id === state.career.currentTeam ? 1000 : 0;
+      const score = marketValue + need * 0.38 + strategyFit + motherBonus + rightsBonus + randomNormal() * (waitRound ? 4 : 7);
       return { team, context, need, score };
     }).sort((left, right) => right.score - left.score);
     const threshold = waitRound ? 15 : 27;
     const eligible = candidates.filter(candidate => candidate.score >= threshold);
     let cap = marketValue >= 64 ? 3 : (marketValue >= 38 ? 2 : (marketValue >= 18 ? 1 : 0));
+    if (rookieRightsOffer) cap = Math.max(1, cap);
     if (waitRound && marketValue >= 8) cap = Math.max(1, cap);
     if (forcedMarket === 'three') cap = 3;
     const offerCount = forcedMarket === 'three' ? 3 : Math.min(cap, eligible.length, cap ? 1 + Math.floor(random() * cap) : 0);
@@ -1787,34 +1793,37 @@
     const won = margin >= 0;
     const myScore = Math.max(84, Math.round(110 + margin / 2 + randomNormal() * 5));
     const theirScore = Math.max(82, Math.round(110 - margin / 2 + randomNormal() * 5));
-    const positionFactor = {
-      PG: { fga: 17, reb: 4, ast: 9, stl: 1.5, blk: 0.3, tov: 2.8 },
-      SG: { fga: 19, reb: 5, ast: 5, stl: 1.2, blk: 0.4, tov: 2.3 },
-      SF: { fga: 17, reb: 7, ast: 5, stl: 1.1, blk: 0.7, tov: 2.1 },
-      PF: { fga: 15, reb: 10, ast: 4, stl: 0.9, blk: 1.0, tov: 1.9 },
-      C: { fga: 14, reb: 12, ast: 4, stl: 0.7, blk: 1.6, tov: 2.0 }
-    }[state.position];
     const minutes = unavailable ? 0 : Math.round(clamp(state.season.roleProfile.minutes + randomNormal() * 1.7, 4, 40) * 10) / 10;
-    const minuteScale = minutes / 34;
-    const usageScale = clamp(state.season.roleProfile.usage / 25, 0.48, 1.48);
-    const statScale = effectiveOVR / 88;
-    const fga = unavailable ? 0 : Math.max(2, Math.round(positionFactor.fga * minuteScale * usageScale + randomNormal() * 1.8));
-    const tpa = unavailable ? 0 : clamp(Math.round(2 + state.attrs.threePT / 100 * 6 + randomNormal() * 1.2), 0, Math.max(0, fga - 1));
+    const effectiveAttrs = Object.fromEntries(DATA.ATTRS.map(([key]) => [
+      key,
+      key === 'POT' ? state.attrs[key] : clamp(state.attrs[key] - temporaryPenalty, 40, 99)
+    ]));
+    const statProfile = SIM.calculateStatProfile({
+      attrs: effectiveAttrs,
+      position: state.position,
+      minutes,
+      usage: state.season.roleProfile.usage,
+      ovr: effectiveOVR
+    });
+    const { minuteScale, usageScale } = statProfile;
+    const fga = unavailable ? 0 : Math.max(2, Math.round(statProfile.fga + randomNormal() * 1.8));
+    const perimeterBias = { PG: 1.1, SG: 1.2, SF: 1, PF: 0.72, C: 0.48 }[state.position] || 1;
+    const tpa = unavailable ? 0 : clamp(Math.round((1 + effectiveAttrs.threePT / 13) * perimeterBias * minuteScale * usageScale + randomNormal() * 1.2), 0, Math.max(0, fga - 1));
     const twoPa = fga - tpa;
-    const twoPct = clamp(0.36 + (state.attrs.FIN + state.attrs.MID + state.attrs.DNK) / 300 * 0.22, 0.4, 0.67);
-    const threePct = clamp(0.24 + state.attrs.threePT / 100 * 0.2, 0.25, 0.46);
-    const fta = unavailable ? 0 : Math.max(0, Math.round((2 + (state.attrs.FIN + state.attrs.ATH) / 200 * 5) * minuteScale * usageScale + randomNormal() * 1.2));
-    const ftPct = clamp(0.52 + (state.attrs.MID + state.attrs.CLU) / 200 * 0.32, 0.58, 0.92);
+    const twoPct = clamp(0.36 + (effectiveAttrs.FIN + effectiveAttrs.MID + effectiveAttrs.DNK) / 300 * 0.22, 0.4, 0.67);
+    const threePct = clamp(0.24 + effectiveAttrs.threePT / 100 * 0.2, 0.25, 0.46);
+    const fta = unavailable ? 0 : Math.max(0, Math.round((2 + (effectiveAttrs.FIN + effectiveAttrs.ATH) / 200 * 5) * minuteScale * usageScale + randomNormal() * 1.2));
+    const ftPct = clamp(0.52 + (effectiveAttrs.MID + effectiveAttrs.CLU) / 200 * 0.32, 0.58, 0.92);
     const tpm = clamp(Math.round(tpa * threePct + randomNormal() * 0.9), 0, tpa);
     const twoPm = clamp(Math.round(twoPa * twoPct + randomNormal() * 1.1), 0, twoPa);
     const ftm = clamp(Math.round(fta * ftPct + randomNormal() * 0.7), 0, fta);
     const stats = unavailable ? { ...freshPlayerTotals() } : {
       pts: twoPm * 2 + tpm * 3 + ftm,
-      reb: Math.max(0, Math.round(positionFactor.reb * statScale * minuteScale + randomNormal() * 2.1)),
-      ast: Math.max(0, Math.round(positionFactor.ast * statScale * minuteScale * (0.72 + usageScale * 0.28) + randomNormal() * 2.1)),
-      stl: Math.max(0, Math.round((positionFactor.stl * (0.65 + state.attrs.PDEF / 180) * minuteScale + randomNormal() * 0.55) * 10) / 10),
-      blk: Math.max(0, Math.round((positionFactor.blk * (0.55 + state.attrs.BLK / 150) * minuteScale + randomNormal() * 0.45) * 10) / 10),
-      tov: Math.max(0, Math.round((positionFactor.tov * minuteScale * usageScale + randomNormal() * 0.75) * 10) / 10),
+      reb: Math.max(0, Math.round(statProfile.reb + randomNormal() * 1.8)),
+      ast: Math.max(0, Math.round(statProfile.ast + randomNormal() * 1.8)),
+      stl: Math.max(0, Math.round((statProfile.stl + randomNormal() * 0.45) * 10) / 10),
+      blk: Math.max(0, Math.round((statProfile.blk + randomNormal() * 0.38) * 10) / 10),
+      tov: Math.max(0, Math.round((statProfile.tov + randomNormal() * 0.65) * 10) / 10),
       fgm: twoPm + tpm,
       fga,
       tpm,
@@ -2484,8 +2493,16 @@
     const offer = pending.offers.find(item => item.teamId === teamId);
     if (!offer) return;
     const oldTeamId = state.career.currentTeam;
+    const previousContractNumber = state.career.contract?.number ?? ((state.career.completedContracts ?? 0) + 1);
+    state.career.completedContracts = (state.career.completedContracts ?? 0) + 1;
     state.career.currentTeam = teamId;
-    state.career.contract = { yearsRemaining: offer.years, totalYears: offer.years, annualSalary: offer.annualSalary };
+    state.career.contract = {
+      yearsRemaining: offer.years,
+      totalYears: offer.years,
+      annualSalary: offer.annualSalary,
+      type: 'standard',
+      number: previousContractNumber + 1
+    };
     if (teamId !== oldTeamId) {
       state.career.recentDepartures.push({ teamId: oldTeamId, season: state.career.seasonNumber });
       if (!state.career.teamsPlayed.includes(teamId)) state.career.teamsPlayed.push(teamId);
@@ -3242,6 +3259,10 @@
     if (state.career) {
       if (!Number.isFinite(state.career.rngState) || state.career.rngState === 0) state.career.rngState = hashText(`${state.eraKey}-${state.career.startYear}-${state.career.currentTeam}-${state.finalOVR}`);
       state.career.potential = clamp(state.career.potential ?? state.attrs.POT ?? 70, 40, 99);
+      const signedContracts = (state.career.transactions || []).filter(event => ['续约', '自由签约'].includes(event.type)).length;
+      if (!Number.isFinite(state.career.completedContracts)) state.career.completedContracts = signedContracts;
+      if (!state.career.contract.type) state.career.contract.type = state.career.completedContracts === 0 ? 'rookie' : 'standard';
+      if (!Number.isFinite(state.career.contract.number)) state.career.contract.number = state.career.completedContracts + 1;
       if (!Array.isArray(state.career.teamsPlayed)) state.career.teamsPlayed = [state.career.currentTeam];
       if (!Number.isFinite(state.career.luck)) state.career.luck = 45 + hashText(`${state.position}-${state.career.currentTeam}-${state.finalOVR}`) % 51;
       state.career.totals = { ...freshPlayerTotals(), ...(state.career.totals || {}) };
@@ -3257,6 +3278,16 @@
       if (!Number.isFinite(state.career.minutesPenaltyNextSeason)) state.career.minutesPenaltyNextSeason = 0;
       state.career.forcedRetirement = Boolean(state.career.forcedRetirement);
       const league = ensureLeagueState();
+      if (state.eraKey === 'current') {
+        const currentPlayers = Object.values(DATA.PLAYERS).flat();
+        const initialSeasonOffset = Math.max(0, state.career.seasonNumber - 1);
+        league.players.forEach(player => {
+          if (!String(player.id).startsWith('base-')) return;
+          const source = currentPlayers.find(item => canonicalLeagueName(item.name) === canonicalLeagueName(player.name));
+          if (Number.isFinite(source?.age)) player.age = source.age + initialSeasonOffset;
+          if (Number.isFinite(source?.rookieYear)) player.rookieYear = source.rookieYear;
+        });
+      }
       league.players.forEach(player => { player.potential = clamp(player.potential ?? 70, 40, 99); });
       syncUserLeaguePlayer();
       fillLeagueRosters(league, state.career.seasonNumber);

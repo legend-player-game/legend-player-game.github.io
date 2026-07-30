@@ -217,7 +217,63 @@
     return PLAYER_POSITION_OVERRIDES[normalizePlayerName(name)] || [primaryPosition];
   }
 
-  function createPlayer(teamId, seed) {
+  const CURRENT_PLAYER_METADATA = {
+    '杰森塔特姆': { age: 27, rookieYear: 2017 },
+    '杰伦布朗': { age: 28, rookieYear: 2016 },
+    '德里克怀特': { age: 31, rookieYear: 2017 },
+    '保罗乔治': { age: 35, rookieYear: 2010 },
+    '佩顿普里查德': { age: 27, rookieYear: 2020 },
+    '内米亚斯克塔': { age: 26, rookieYear: 2021 },
+    '米切尔罗宾逊': { age: 27, rookieYear: 2018 },
+    '卢卡加尔扎': { age: 26, rookieYear: 2021 },
+    '萨姆豪瑟': { age: 27, rookieYear: 2021 },
+    '迈克康利': { age: 37, rookieYear: 2007 },
+    '贝勒沙伊尔曼': { age: 24, rookieYear: 2024 },
+    '乔丹沃尔什': { age: 21, rookieYear: 2023 },
+    '杰伦约翰逊': { age: 23, rookieYear: 2021 },
+    '诺曼鲍威尔': { age: 32, rookieYear: 2015 },
+    '多诺万米切尔': { age: 28, rookieYear: 2017 },
+    '埃文莫布利': { age: 24, rookieYear: 2021 },
+    '贾勒特阿伦': { age: 27, rookieYear: 2017 },
+    '贾马尔默里': { age: 28, rookieYear: 2016 },
+    '杰伦杜伦': { age: 21, rookieYear: 2022 },
+    '泰雷斯哈利伯顿': { age: 25, rookieYear: 2020 },
+    '帕斯卡尔西亚卡姆': { age: 31, rookieYear: 2016 },
+    '奥斯汀里夫斯': { age: 27, rookieYear: 2021 },
+    '泰勒希罗': { age: 25, rookieYear: 2019 },
+    '杰登麦克丹尼尔斯': { age: 24, rookieYear: 2020 },
+    '特雷墨菲': { age: 25, rookieYear: 2021 },
+    '萨迪克贝': { age: 26, rookieYear: 2020 },
+    'OG阿奴诺比': { age: 28, rookieYear: 2017 },
+    '阿杰米切尔': { age: 23, rookieYear: 2024 },
+    '以赛亚哈尔滕施泰因': { age: 27, rookieYear: 2017 },
+    '保罗班切罗': { age: 22, rookieYear: 2022 },
+    '德斯蒙德贝恩': { age: 27, rookieYear: 2020 },
+    '泰雷斯马克西': { age: 24, rookieYear: 2020 },
+    '狄龙布鲁克斯': { age: 29, rookieYear: 2017 },
+    '达米安利拉德': { age: 35, rookieYear: 2012 },
+    '德尼阿夫迪亚': { age: 24, rookieYear: 2020 },
+    '达龙福克斯': { age: 27, rookieYear: 2017 },
+    '布兰登英格拉姆': { age: 27, rookieYear: 2016 },
+    '劳里马尔卡宁': { age: 28, rookieYear: 2017 },
+    '小贾伦杰克逊': { age: 25, rookieYear: 2018 }
+  };
+
+  function draftMetadata(name) {
+    const normalized = normalizePlayerName(name).replace('塔特姆', '塔图姆');
+    const classes = window.NBA_ERA_DATA?.draftClasses || {};
+    for (const [year, prospects] of Object.entries(classes)) {
+      if (prospects.some(prospect => normalizePlayerName(prospect.name) === normalized)) {
+        const rookieYear = Number(year);
+        return { rookieYear, age: 19 + CURRENT_ERA_START_YEAR - rookieYear };
+      }
+    }
+    return null;
+  }
+
+  const CURRENT_ERA_START_YEAR = 2025;
+
+  function createPlayer(teamId, seed, currentRoster = false) {
     const [name, listedPosition, archetype, ovr, potential, age, rookieYear] = seed;
     const profile = ARCHETYPES[archetype];
     const hash = hashName(name);
@@ -242,7 +298,16 @@
     // Official OVR remains the public rating anchor. The internal value only allows a
     // small attributes-based adjustment, so archetype generation cannot inflate ratings.
     const simOvr = Math.max(ovr - 2, Math.min(ovr + 2, Math.round(ovr * 0.85 + attributeOvr * 0.15)));
-    return { name, pos, positions, archetype, archetypeLabel: profile.label, ovr, sourceOvr: ovr, attributeOvr, simOvr, teamId, age, rookieYear, ...attrs };
+    const metadata = currentRoster
+      ? (CURRENT_PLAYER_METADATA[normalizePlayerName(name)] || draftMetadata(name))
+      : null;
+    return {
+      name, pos, positions, archetype, archetypeLabel: profile.label, ovr, sourceOvr: ovr,
+      attributeOvr, simOvr, teamId,
+      age: age ?? metadata?.age,
+      rookieYear: rookieYear ?? metadata?.rookieYear,
+      ...attrs
+    };
   }
 
   const ACTIVE_ROSTER_SEEDS = window.NBA_ROSTER_SEEDS || Object.fromEntries(
@@ -254,7 +319,7 @@
       .slice()
       .sort((left, right) => right[3] - left[3])
       .slice(0, 15)
-      .map(seed => createPlayer(team.id, seed))])
+      .map(seed => createPlayer(team.id, seed, true))])
   );
 
   const CURRENT_ERA = {

@@ -122,6 +122,29 @@ test('contract market value can fall below the offer threshold', () => {
   assert.ok(decliningReserve < 10);
 });
 
+test('season stat profile responds to the matching detailed attributes', () => {
+  const attrs = {
+    threePT: 70, MID: 70, FIN: 70, DNK: 70, HAN: 70, PAS: 70,
+    PDEF: 70, IDEF: 70, BLK: 70, REB: 70, ATH: 70, STR: 70, CLU: 70
+  };
+  const base = SIM.calculateStatProfile({ attrs, position: 'SF', minutes: 34, usage: 25, ovr: 82 });
+  const passer = SIM.calculateStatProfile({ attrs: { ...attrs, HAN: 92, PAS: 95 }, position: 'SF', minutes: 34, usage: 25, ovr: 82 });
+  const rebounder = SIM.calculateStatProfile({ attrs: { ...attrs, REB: 96, STR: 90 }, position: 'SF', minutes: 34, usage: 25, ovr: 82 });
+  const scorer = SIM.calculateStatProfile({ attrs: { ...attrs, threePT: 94, MID: 92, FIN: 94, HAN: 90 }, position: 'SF', minutes: 34, usage: 25, ovr: 82 });
+  assert.ok(passer.ast > base.ast * 1.15);
+  assert.ok(passer.tov < base.tov * 0.93);
+  assert.ok(rebounder.reb > base.reb * 1.15);
+  assert.ok(scorer.fga > base.fga * 1.08);
+});
+
+test('overall is only a secondary stat stabilizer', () => {
+  const attrs = Object.fromEntries(['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'].map(key => [key, 82]));
+  const low = SIM.calculateStatProfile({ attrs, position: 'PG', minutes: 34, usage: 25, ovr: 75 });
+  const high = SIM.calculateStatProfile({ attrs, position: 'PG', minutes: 34, usage: 25, ovr: 95 });
+  assert.ok(high.ast > low.ast);
+  assert.ok(high.ast < low.ast * 1.1);
+});
+
 function careerFixture(overrides = {}) {
   const history = Array.from({ length: 20 }, (_, index) => ({
     seasonNumber: index + 1,

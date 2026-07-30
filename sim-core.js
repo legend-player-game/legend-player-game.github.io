@@ -220,6 +220,37 @@
     return Math.round((base + upside - decline) * (0.55 + availability * 0.45) * 10) / 10;
   }
 
+  function calculateStatProfile({ attrs = {}, position = 'SF', minutes = 34, usage = 25, ovr = 80 } = {}) {
+    const base = {
+      PG: { fga: 17, reb: 4, ast: 9, stl: 1.5, blk: 0.3, tov: 2.8 },
+      SG: { fga: 19, reb: 5, ast: 5, stl: 1.2, blk: 0.4, tov: 2.3 },
+      SF: { fga: 17, reb: 7, ast: 5, stl: 1.1, blk: 0.7, tov: 2.1 },
+      PF: { fga: 15, reb: 10, ast: 4, stl: 0.9, blk: 1.0, tov: 1.9 },
+      C: { fga: 14, reb: 12, ast: 4, stl: 0.7, blk: 1.6, tov: 2.0 }
+    }[position] || { fga: 17, reb: 7, ast: 5, stl: 1.1, blk: 0.7, tov: 2.1 };
+    const value = key => clamp(Number(attrs[key]) || 40, 40, 99);
+    const minuteScale = clamp(minutes, 0, 48) / 34;
+    const usageScale = clamp(usage / 25, 0.48, 1.48);
+    const scoringSkill = value('threePT') * 0.22 + value('MID') * 0.18 + value('FIN') * 0.23
+      + value('DNK') * 0.12 + value('HAN') * 0.17 + value('ATH') * 0.08;
+    const reboundingSkill = value('REB') * 0.62 + value('STR') * 0.2 + value('ATH') * 0.18;
+    const playmakingSkill = value('PAS') * 0.68 + value('HAN') * 0.25 + value('CLU') * 0.07;
+    const stealSkill = value('PDEF') * 0.72 + value('ATH') * 0.2 + value('HAN') * 0.08;
+    const blockSkill = value('BLK') * 0.64 + value('IDEF') * 0.24 + value('ATH') * 0.12;
+    const ballSecurity = value('HAN') * 0.62 + value('PAS') * 0.3 + value('CLU') * 0.08;
+    const ovrStability = clamp(0.94 + (clamp(ovr, 40, 99) - 80) * 0.003, 0.82, 1.06);
+    return {
+      fga: base.fga * minuteScale * usageScale * clamp(0.62 + scoringSkill / 185, 0.78, 1.16) * ovrStability,
+      reb: base.reb * minuteScale * clamp(0.42 + reboundingSkill / 120, 0.72, 1.25) * ovrStability,
+      ast: base.ast * minuteScale * (0.72 + usageScale * 0.28) * clamp(0.36 + playmakingSkill / 105, 0.68, 1.3) * ovrStability,
+      stl: base.stl * minuteScale * clamp(0.38 + stealSkill / 108, 0.68, 1.28),
+      blk: base.blk * minuteScale * clamp(0.34 + blockSkill / 105, 0.65, 1.28),
+      tov: base.tov * minuteScale * usageScale * clamp(1.42 - ballSecurity / 160, 0.76, 1.12),
+      minuteScale,
+      usageScale
+    };
+  }
+
   function calculateCareerLegacy(career) {
     const history = Array.isArray(career?.history) ? career.history : [];
     const totals = career?.totals || {};
@@ -314,6 +345,7 @@
     tradeValue,
     calculateTradeProbability,
     contractMarketValue,
+    calculateStatProfile,
     calculateCareerLegacy,
     auditLeague
   };
