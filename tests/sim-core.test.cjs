@@ -76,3 +76,61 @@ test('series probability responds to both teams', () => {
   assert.ok(SIM.seriesWinProbability(80, 92, 0) < 0.3);
   assert.equal(SIM.seriesWinProbability(86, 86, 0), 0.5);
 });
+
+test('trade value rewards youth and penalizes aging contracts', () => {
+  const young = SIM.tradeValue({ ovr: 86, age: 22, potential: 92, contractYears: 4 });
+  const veteran = SIM.tradeValue({ ovr: 86, age: 35, potential: 70, contractYears: 3 });
+  assert.ok(young > veteran + 15);
+  assert.ok(SIM.tradeValue({ ovr: 94, age: 28, potential: 80, contractYears: 2 }) > young);
+});
+
+function careerFixture(overrides = {}) {
+  const history = Array.from({ length: 20 }, (_, index) => ({
+    seasonNumber: index + 1,
+    age: 18 + index,
+    ovr: 84 + Math.min(index, 8) - Math.max(0, index - 13) * 2,
+    games: 82,
+    wins: 44,
+    champion: false,
+    postseason: '首轮止步'
+  }));
+  return {
+    history,
+    totals: { pts: 23358, reb: 14920, ast: 4964 },
+    awardCounts: { '最佳阵容': 7 },
+    championships: 0,
+    peakOVR: 97,
+    totalGames: 1640,
+    ...overrides
+  };
+}
+
+test('twenty seasons alone do not max production or longevity', () => {
+  const legacy = SIM.calculateCareerLegacy(careerFixture());
+  assert.ok(legacy.dimensions['生涯产量'] < 85);
+  assert.ok(legacy.dimensions['持久稳定'] < 100);
+  assert.ok(legacy.score < 68);
+  assert.equal(/历史前/.test(legacy.tier.rank), false);
+});
+
+test('historical tiers require awards and winning gates', () => {
+  const history = Array.from({ length: 20 }, (_, index) => ({
+    seasonNumber: index + 1,
+    age: 18 + index,
+    ovr: index < 15 ? 97 : 92,
+    games: 80,
+    wins: 58,
+    champion: index < 4,
+    postseason: index < 4 ? '总冠军' : '分区决赛止步'
+  }));
+  const legacy = SIM.calculateCareerLegacy(careerFixture({
+    history,
+    totals: { pts: 39000, reb: 12500, ast: 10500 },
+    awardCounts: { '最有价值球员': 4, '最佳阵容': 15, '常规赛得分王': 5 },
+    championships: 4,
+    peakOVR: 99,
+    totalGames: 1600
+  }));
+  assert.ok(legacy.score >= 89);
+  assert.match(legacy.tier.rank, /历史前/);
+});

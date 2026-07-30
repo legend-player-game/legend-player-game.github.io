@@ -2201,6 +2201,10 @@ button.attribute-slot:not(:disabled):hover {
 }
 
 .career-summary {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding-bottom: 30px;
 }
 
@@ -2457,8 +2461,43 @@ button.attribute-slot:not(:disabled):hover {
 }
 
 @media (max-width: 420px) {
+  .season-screen {
+    padding-inline: 12px;
+  }
+
+  .career-summary-hero {
+    padding-inline: 12px;
+  }
+
   .career-summary-hero h1 {
-    font-size: 36px;
+    max-width: 100%;
+    font-size: 30px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .career-summary-hero p {
+    font-size: 16px;
+  }
+
+  .legacy-badges {
+    margin-inline: 10px;
+  }
+
+  .career-legacy-copy {
+    padding-inline: 10px;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  .legacy-dimensions {
+    grid-template-columns: 1fr;
+    margin-inline: 10px;
+  }
+
+  .legacy-caveat,
+  .career-summary-grid {
+    margin-inline: 10px;
   }
 
   h1 {
