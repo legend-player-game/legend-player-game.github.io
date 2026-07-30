@@ -9,9 +9,9 @@
   const backBtn = document.getElementById('back-btn');
   const homeBtn = document.getElementById('home-btn');
   const soundBtn = document.getElementById('sound-btn');
-  const SAVE_KEY = 'build-a-player-save-v4';
-  const LEGACY_SAVE_KEYS = ['build-a-player-save-v3'];
-  const SAVE_SCHEMA_VERSION = 4;
+  const SAVE_KEY = 'build-a-player-save-v5';
+  const LEGACY_SAVE_KEYS = ['build-a-player-save-v4', 'build-a-player-save-v3'];
+  const SAVE_SCHEMA_VERSION = 5;
   const HONOR_KEY = 'build-a-player-honors-v1';
   const CAREER_SEASONS = 20;
   const CAREER_START_AGE = 18;
@@ -138,6 +138,8 @@
       tradeRequestFailures: 0,
       tradeCounterpartIds: [],
       recentDepartures: [],
+      teamRelationships: { [debugState.careerTeam]: 65 },
+      pendingOffseason: null,
       minutesPenaltyNextSeason: 0,
       forcedRetirement: false,
       completed: false,
@@ -740,6 +742,8 @@
         tradeRequestFailures: 0,
         tradeCounterpartIds: [],
         recentDepartures: [],
+        teamRelationships: { [state.careerTeam]: 65 },
+        pendingOffseason: null,
         minutesPenaltyNextSeason: 0,
         forcedRetirement: false,
         completed: false,
@@ -1166,6 +1170,172 @@
       .sort((left, right) => right.score - left.score || left.valueDifference - right.valueDifference || left.ovrDifference - right.ovrDifference);
   }
 
+  function userTeamLegacy(teamId) {
+    const seasons = (state.career?.history || []).filter(entry => entry.teamId === teamId);
+    const championships = seasons.filter(entry => entry.champion).length;
+    const majorAwards = seasons.reduce((sum, entry) => sum + (entry.awards || []).filter(label => ['最有价值球员', '最佳防守球员'].includes(label)).length, 0);
+    const score = seasons.reduce((sum, entry) => (
+      sum + (entry.games / 82) * Math.max(0, entry.ovr - 70) * 0.55 + entry.wins * 0.05
+    ), 0) + championships * 28 + majorAwards * 18 + seasons.reduce((sum, entry) => sum + (entry.awards || []).filter(label => label === '最佳阵容').length * 6, 0);
+    let consecutive = 0;
+    for (let index = state.career.history.length - 1; index >= 0; index -= 1) {
+      if (state.career.history[index].teamId !== teamId) break;
+      consecutive += 1;
+    }
+    const status = score >= 150 ? '队史第一人' : (score >= 85 ? '队史代表' : (consecutive >= 5 ? '功勋球员' : (consecutive >= 2 ? '长期成员' : '新加盟球员')));
+    return { seasons: seasons.length, consecutive, championships, majorAwards, score: Math.round(score), status };
+  }
+
+  function recentCareerMoves(window = 5) {
+    const cutoff = state.career.seasonNumber - window + 1;
+    return (state.career.transactions || []).filter(event => (
+      event.season >= cutoff && ['球队交易', '申请交易', '自由签约'].includes(event.type)
+    )).length;
+  }
+
+  function seasonsSinceCareerMove() {
+    const movements = (state.career.transactions || []).filter(event => ['球队交易', '申请交易', '自由签约'].includes(event.type));
+    if (!movements.length) return state.career.seasonNumber;
+    return Math.max(0, state.career.seasonNumber - movements[movements.length - 1].season + 1);
+  }
+
+  function replacementPressureForUser(teamId) {
+    const league = ensureLeagueState();
+    const competitors = league.players.filter(player => (
+      player.active && !player.isUser && player.teamId === teamId
+      && leaguePlayerPositions(player).some(position => leaguePlayerPositions(syncUserLeaguePlayer()).includes(position))
+      && player.ovr >= state.finalOVR - 3
+    ));
+    return clamp(competitors.length * 4, 0, 20);
+  }
+
+  function userTradeAssessment(completedSeason, nextAge) {
+    const legacy = userTeamLegacy(state.career.currentTeam);
+    const wins = completedSeason?.wins ?? state.season?.wins ?? 41;
+    const rebuildingVeteran = nextAge >= 31 && wins < 39 ? 8 : 0;
+    const developingMismatch = nextAge >= 28 && state.finalOVR < 82 && wins >= 46 ? 6 : 0;
+    return SIM.calculateTradeProbability({
+      age: nextAge,
+      ovr: state.finalOVR,
+      potential: state.career.potential,
+      contractYears: state.career.contract.yearsRemaining,
+      teamTenure: legacy.consecutive,
+      teamsPlayed: state.career.teamsPlayed.length,
+      recentMoves: recentCareerMoves(),
+      franchiseScore: legacy.score,
+      championships: legacy.championships,
+      majorAwards: legacy.majorAwards,
+      teamWins: wins,
+      replacementPressure: replacementPressureForUser(state.career.currentTeam),
+      directionMismatch: rebuildingVeteran + developingMismatch,
+      relationship: state.career.teamRelationships[state.career.currentTeam] ?? 55,
+      seasonsSinceMove: seasonsSinceCareerMove()
+    });
+  }
+
+  function leaguePlayerTradeAssessment(league, player, seasonNumber) {
+    const history = player.seasonHistory || [];
+    const currentHistory = history.filter(entry => entry.teamId === player.teamId);
+    let tenure = 0;
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      if (history[index].teamId !== player.teamId) break;
+      tenure += 1;
+    }
+    const teamsPlayed = new Set(history.map(entry => entry.teamId).filter(Boolean));
+    const recentTeams = history.slice(-5).map(entry => entry.teamId).filter(Boolean);
+    let recentMoves = 0;
+    recentTeams.forEach((teamId, index) => { if (index && recentTeams[index - 1] !== teamId) recentMoves += 1; });
+    const teamWins = league.teamRecords?.[player.teamId]?.wins ?? 41;
+    const samePosition = league.players.filter(item => item.active && item.id !== player.id && item.teamId === player.teamId
+      && leaguePlayerPositions(item).some(position => leaguePlayerPositions(player).includes(position)) && item.ovr >= player.ovr - 3).length;
+    return SIM.calculateTradeProbability({
+      age: player.age,
+      ovr: player.ovr,
+      potential: player.potential,
+      contractYears: player.contractYears,
+      teamTenure: tenure,
+      teamsPlayed: Math.max(1, teamsPlayed.size),
+      recentMoves,
+      franchiseScore: currentHistory.reduce((sum, entry) => sum + Math.max(0, (entry.pts || 0) - 8) * 0.35 + Math.max(0, (entry.wins || 0) - 30) * 0.08, 0),
+      teamWins,
+      replacementPressure: samePosition * 4,
+      directionMismatch: player.age >= 31 && teamWins < 38 ? 8 : 0,
+      seasonsSinceMove: tenure
+    });
+  }
+
+  function roleLabel(minutes) {
+    return minutes >= 34 ? '绝对核心' : (minutes >= 29 ? '主力首发' : (minutes >= 22 ? '主要轮换' : (minutes >= 14 ? '边缘轮换' : '板凳末端')));
+  }
+
+  function projectedUserRole(teamId) {
+    const league = ensureLeagueState();
+    const user = { ...syncUserLeaguePlayer(), teamId };
+    const roster = league.players.filter(player => player.active && !player.isUser && player.teamId === teamId).concat(user)
+      .sort((left, right) => right.ovr - left.ovr || String(left.id).localeCompare(String(right.id))).slice(0, 15);
+    const allocation = SIM.allocateRotation(roster);
+    const rank = roster.findIndex(player => player.id === user.id);
+    const minutes = allocation[user.id] || 0;
+    const profile = leagueRoleProfile(user, roster, Math.max(0, rank), minutes);
+    const competitors = roster.filter(player => !player.isUser && leaguePlayerPositions(player).some(position => leaguePlayerPositions(user).includes(position)))
+      .slice(0, 3).map(player => ({ id: player.id, name: player.name, ovr: player.ovr, positions: leaguePlayerPositions(player) }));
+    return { minutes, usage: profile.usage, rotationRank: rank + 1, role: roleLabel(minutes), competitors };
+  }
+
+  function teamMarketContext(teamId) {
+    const league = ensureLeagueState();
+    const team = DATA.getTeam(teamId);
+    const records = league.teamRecords || {};
+    const record = records[teamId] || { wins: 41, losses: 41 };
+    const standings = league.standings || SIM.conferenceSeeds(DATA.TEAMS, records);
+    const rank = standings[team.conference]?.find(item => item.id === teamId)?.seed || 15;
+    const phase = record.wins >= 49 ? '争冠' : (record.wins >= 40 ? '冲击季后赛' : '重建');
+    const roster = league.players.filter(player => player.active && !player.isUser && player.teamId === teamId)
+      .sort((left, right) => right.ovr - left.ovr).slice(0, 8)
+      .map(player => ({ id: player.id, name: player.name, ovr: player.ovr, age: player.age, positions: leaguePlayerPositions(player) }));
+    return { rank, wins: record.wins, losses: record.losses, phase, roster };
+  }
+
+  function generateContractOffers(waitRound = false) {
+    const league = ensureLeagueState();
+    const user = syncUserLeaguePlayer();
+    const age = state.career.age + 1;
+    const availability = state.season.playerGames / 82;
+    const marketValue = SIM.contractMarketValue({ ovr: state.finalOVR, age, potential: state.career.potential, availability });
+    const forcedMarket = localDebugParam('marketOutcome');
+    if (forcedMarket === 'none') return [];
+    const candidates = DATA.TEAMS.map(team => {
+      const context = teamMarketContext(team.id);
+      const need = teamPositionNeed(league, team.id, leaguePlayerPositions(user), user.id);
+      const strategyFit = age <= 25 && context.phase === '重建' ? 8 : (state.finalOVR >= 86 && context.phase === '争冠' ? 9 : 0);
+      const motherBonus = team.id === state.career.currentTeam
+        ? 4 + (state.career.teamRelationships[team.id] ?? 55) * 0.08 + userTeamLegacy(team.id).score * 0.035
+        : 0;
+      const score = marketValue + need * 0.38 + strategyFit + motherBonus + randomNormal() * (waitRound ? 4 : 7);
+      return { team, context, need, score };
+    }).sort((left, right) => right.score - left.score);
+    const threshold = waitRound ? 15 : 27;
+    const eligible = candidates.filter(candidate => candidate.score >= threshold);
+    let cap = marketValue >= 64 ? 3 : (marketValue >= 38 ? 2 : (marketValue >= 18 ? 1 : 0));
+    if (waitRound && marketValue >= 8) cap = Math.max(1, cap);
+    if (forcedMarket === 'three') cap = 3;
+    const offerCount = forcedMarket === 'three' ? 3 : Math.min(cap, eligible.length, cap ? 1 + Math.floor(random() * cap) : 0);
+    return eligible.slice(0, offerCount).map((candidate, index) => {
+      const projection = projectedUserRole(candidate.team.id);
+      const yearsCap = age >= 35 ? 1 : (age >= 32 ? 2 : (age <= 26 ? 5 : 4));
+      const years = clamp(yearsCap - Math.floor(index / 2) - (waitRound ? 1 : 0), 1, 5);
+      const annualSalary = Math.max(1, Math.round((state.finalOVR - 67) * 1.5 + candidate.need * 0.11 + (candidate.team.id === state.career.currentTeam ? 1 : 0)));
+      return {
+        teamId: candidate.team.id,
+        years,
+        annualSalary,
+        projection,
+        ...candidate.context,
+        isCurrentTeam: candidate.team.id === state.career.currentTeam
+      };
+    });
+  }
+
   function leagueRoleProfile(player, roster, rank, minutes) {
     const creatorAverage = roster.slice(0, 3).reduce((sum, teammate) => sum + teammate.ovr, 0) / Math.max(1, Math.min(3, roster.length));
     const archetypeUsage = { creator: 3.5, slasher: 2.8, sniper: 1.8, wing: 1.2, pointbig: 1.4, big: 0.3, twoway: -0.5, anchor: -1.8 }[player.archetype] || 0;
@@ -1413,10 +1583,17 @@
     for (let index = 0; index < tradeCount; index += 1) {
       const pool = league.players.filter(player => player.active && !player.isUser && player.teamId && !used.has(player.id));
       if (pool.length < 2) break;
-      const first = pool[Math.floor(random() * pool.length)];
+      const first = pool.map(player => {
+        const assessment = leaguePlayerTradeAssessment(league, player, nextSeasonNumber);
+        return { player, priority: assessment.chance + random() * 0.05 };
+      }).sort((left, right) => right.priority - left.priority)[0].player;
       const matches = pool
         .filter(player => player.teamId !== first.teamId && !used.has(player.id))
-        .map(player => ({ player, score: tradePairScore(league, first, player, nextSeasonNumber) + randomNormal() * 1.2 }))
+        .map(player => {
+          const assessment = leaguePlayerTradeAssessment(league, player, nextSeasonNumber);
+          const protectedPlayer = assessment.chance < 0.03 && random() >= assessment.chance * 4;
+          return { player, score: protectedPlayer ? -Infinity : tradePairScore(league, first, player, nextSeasonNumber) + assessment.chance * 22 + randomNormal() * 1.2 };
+        })
         .filter(candidate => Number.isFinite(candidate.score))
         .sort((left, right) => right.score - left.score);
       if (!matches.length) continue;
@@ -2206,23 +2383,6 @@
     };
   }
 
-  function pickCareerTeam(excludedTeamId, incomingPlayer) {
-    const league = ensureLeagueState();
-    const recentDepartures = new Set((state.career?.recentDepartures || [])
-      .filter(entry => state.career.seasonNumber - entry.season < 3)
-      .map(entry => entry.teamId));
-    const preferred = DATA.TEAMS.filter(team => team.id !== excludedTeamId && !recentDepartures.has(team.id));
-    const pool = preferred.length ? preferred : DATA.TEAMS.filter(team => team.id !== excludedTeamId);
-    const player = incomingPlayer || syncUserLeaguePlayer();
-    const ranked = pool.map(team => {
-      const wins = league.teamRecords?.[team.id]?.wins ?? 41;
-      const need = teamPositionNeed(league, team.id, leaguePlayerPositions(player));
-      const strategyFit = player.age <= 25 && wins < 40 ? 5 : (player.ovr >= 88 && wins >= 43 ? 6 : 0);
-      return { team, score: need + strategyFit + randomNormal() * 1.8 };
-    }).sort((left, right) => right.score - left.score).slice(0, 5);
-    return ranked[Math.floor(random() * ranked.length)].team.id;
-  }
-
   function tradeFitDescription(candidate) {
     const player = candidate.player;
     const samePosition = leaguePlayerPositions(player).includes(state.position);
@@ -2247,6 +2407,8 @@
     state.career.tradeCounterpartIds.push(matched.id);
     state.career.recentDepartures.push({ teamId: oldTeamId, season: state.career.seasonNumber });
     if (!state.career.teamsPlayed.includes(targetTeamId)) state.career.teamsPlayed.push(targetTeamId);
+    state.career.teamRelationships[oldTeamId] = clamp((state.career.teamRelationships[oldTeamId] ?? 55) - (type === '申请交易' ? 15 : 5), 0, 100);
+    state.career.teamRelationships[targetTeamId] = state.career.teamRelationships[targetTeamId] ?? 55;
     if (!Array.isArray(league.transactionHistory)) league.transactionHistory = [];
     league.transactionHistory.push({
       seasonNumber: state.career.seasonNumber + 1,
@@ -2279,44 +2441,104 @@
 
   function processCareerMovement(completedSeason, nextAge, requestedTrade) {
     const career = state.career;
-    const currentTeam = career.currentTeam;
     career.contract.yearsRemaining -= 1;
-    if (requestedTrade) {
-      if (career.contract.yearsRemaining <= 0) career.contract.yearsRemaining = 1;
-      return state.season.tradeResult;
-    }
-    let event = null;
+    if (requestedTrade) return { status: 'ready', movement: state.season.tradeResult };
     if (career.contract.yearsRemaining <= 0) {
-      const stayChance = clamp(0.48 + (completedSeason.wins - 41) / 120 + (state.finalOVR - 82) * 0.025 - (nextAge >= 34 ? 0.12 : 0), 0.25, 0.88);
-      const years = nextAge >= 35 ? 2 : (nextAge >= 31 ? 3 : 4);
-      const salary = Math.max(3, Math.round((state.finalOVR - 67) * 1.55));
-      if (random() < stayChance) {
-        career.contract = { yearsRemaining: years, totalYears: years, annualSalary: salary };
-        event = { type: '续约', teamId: currentTeam, text: `与${DATA.getTeam(currentTeam).name}续约 ${years} 年` };
-      } else {
-        const nextTeam = pickCareerTeam(currentTeam, syncUserLeaguePlayer());
-        career.recentDepartures.push({ teamId: currentTeam, season: career.seasonNumber });
-        career.currentTeam = nextTeam;
-        career.contract = { yearsRemaining: years, totalYears: years, annualSalary: salary };
-        event = { type: '自由签约', teamId: nextTeam, text: `合同到期，签约${DATA.getTeam(nextTeam).name} ${years} 年` };
-      }
-    } else {
-      const tradeChance = 0.1 + (completedSeason.wins < 35 ? 0.06 : 0) + (career.contract.yearsRemaining === 1 ? 0.05 : 0);
-      if (random() < tradeChance) {
-        const match = userTradeCandidates(ensureLeagueState(), currentTeam)[0];
-        if (match) event = executeUserTrade(ensureLeagueState(), currentTeam, match, '球队交易');
-      }
+      const offers = generateContractOffers(false);
+      career.pendingOffseason = { type: 'free-agency', nextAge, development: null, offers, waitUsed: false };
+      return { status: 'pending', type: 'free-agency' };
     }
-    if (event) {
-      career.transactions.push({ ...event, season: career.seasonNumber + 1, age: nextAge });
-      if (!career.teamsPlayed.includes(career.currentTeam)) career.teamsPlayed.push(career.currentTeam);
+
+    const assessment = userTradeAssessment(completedSeason, nextAge);
+    const forcedOutcome = localDebugParam('movementOutcome');
+    const traded = forcedOutcome === 'trade' || (forcedOutcome !== 'stay' && random() < assessment.chance);
+    if (!traded) return { status: 'ready', movement: null, assessment };
+    const candidates = userTradeCandidates(ensureLeagueState(), currentTeam);
+    if (!candidates.length) return { status: 'ready', movement: null, assessment };
+    const shortlist = candidates.slice(0, Math.min(5, candidates.length));
+    const selected = shortlist[Math.floor(random() * shortlist.length)];
+    const event = executeUserTrade(ensureLeagueState(), currentTeam, selected, '球队交易');
+    event.tradeChance = Math.round(assessment.chance * 100);
+    event.tradeReasons = assessment.risks.length ? assessment.risks : ['球队主动调整阵容结构'];
+    event.protections = assessment.protections;
+    career.transactions.push({ ...event, season: career.seasonNumber + 1, age: nextAge });
+    career.pendingOffseason = { type: 'involuntary-trade', nextAge, development: null, movement: event };
+    return { status: 'pending', type: 'involuntary-trade', movement: event };
+  }
+
+  function finalizeOffseason(pending) {
+    const movement = pending?.movement || null;
+    syncUserLeaguePlayer();
+    const leagueUpdate = evolveLeagueSeason(ensureLeagueState(), state.career.seasonNumber + 1);
+    state.career.seasonNumber += 1;
+    state.career.age = pending.nextAge;
+    state.career.pendingOffseason = null;
+    state.career.lastOffseasonNote = `${pending.development.text}${movement ? ` · ${movement.text}` : ' · 球队阵容保持稳定'} · 联盟${leagueUpdate.retired}人退役，${leagueUpdate.rookies}名新秀入盟，完成${leagueUpdate.transactions}笔签约或交易`;
+    closeModal();
+    initializeCareerSeason();
+  }
+
+  function signContractOffer(teamId) {
+    const pending = state.career?.pendingOffseason;
+    if (!pending || pending.type !== 'free-agency') return;
+    const offer = pending.offers.find(item => item.teamId === teamId);
+    if (!offer) return;
+    const oldTeamId = state.career.currentTeam;
+    state.career.currentTeam = teamId;
+    state.career.contract = { yearsRemaining: offer.years, totalYears: offer.years, annualSalary: offer.annualSalary };
+    if (teamId !== oldTeamId) {
+      state.career.recentDepartures.push({ teamId: oldTeamId, season: state.career.seasonNumber });
+      if (!state.career.teamsPlayed.includes(teamId)) state.career.teamsPlayed.push(teamId);
     }
-    return event;
+    state.career.teamRelationships[teamId] = clamp((state.career.teamRelationships[teamId] ?? 50) + (teamId === oldTeamId ? 10 : 5), 0, 100);
+    const type = teamId === oldTeamId ? '续约' : '自由签约';
+    const movement = {
+      type,
+      teamId,
+      fromTeamId: oldTeamId,
+      years: offer.years,
+      annualSalary: offer.annualSalary,
+      projectedMinutes: offer.projection.minutes,
+      projectedRole: offer.projection.role,
+      text: `${teamId === oldTeamId ? '与母队续约' : `签约${DATA.getTeam(teamId).name}`} ${offer.years} 年、年薪 $${offer.annualSalary}M，预计担任${offer.projection.role}`
+    };
+    state.career.transactions.push({ ...movement, season: state.career.seasonNumber + 1, age: pending.nextAge });
+    pending.movement = movement;
+    finalizeOffseason(pending);
+  }
+
+  function waitForContractMarket() {
+    const pending = state.career?.pendingOffseason;
+    if (!pending || pending.type !== 'free-agency' || pending.waitUsed) return;
+    pending.waitUsed = true;
+    pending.offers = generateContractOffers(true);
+    showFreeAgencyModal();
+    saveGame();
+  }
+
+  function retireWithoutContract() {
+    const pending = state.career?.pendingOffseason;
+    if (!pending || pending.type !== 'free-agency' || pending.offers.length || !pending.waitUsed) return;
+    state.career.completed = true;
+    state.career.forcedRetirement = true;
+    state.career.retirementAge = pending.nextAge;
+    state.career.age = pending.nextAge;
+    state.career.pendingOffseason = null;
+    state.season.stage = 'career-complete';
+    closeModal();
+    renderSeason();
+    saveGame();
+  }
+
+  function confirmOffseasonMovement() {
+    const pending = state.career?.pendingOffseason;
+    if (!pending || pending.type !== 'involuntary-trade') return;
+    finalizeOffseason(pending);
   }
 
   function requestTrade() {
     if (!state.career || !state.season || !['ended', 'champion'].includes(state.season.stage)) return;
-    if (state.career.seasonNumber >= CAREER_SEASONS || state.season.tradeRequested) return;
+    if (state.career.seasonNumber >= CAREER_SEASONS || state.season.tradeRequested || state.career.contract.yearsRemaining <= 1) return;
     archiveCareerSeason();
     const league = ensureLeagueState();
     const oldTeamId = state.career.currentTeam;
@@ -2332,6 +2554,7 @@
     if (!approved) {
       const minutesPenalty = Math.max(10, Math.round((state.season.roleProfile?.minutes || 28) * 0.4));
       state.career.tradeRequestFailures += 1;
+      state.career.teamRelationships[oldTeamId] = clamp((state.career.teamRelationships[oldTeamId] ?? 55) - 25, 0, 100);
       state.career.minutesPenaltyNextSeason = Math.max(state.career.minutesPenaltyNextSeason || 0, minutesPenalty);
       const result = {
         type: '申请交易未通过',
@@ -2345,7 +2568,7 @@
       state.career.transactions.push({ ...result, season: state.career.seasonNumber + 1, age: state.career.age + 1 });
       renderSeason();
       saveGame();
-      showToast('交易申请未获批准，下赛季上场时间将被压缩');
+      showMovementResultModal(result, false);
       return;
     }
 
@@ -2362,11 +2585,16 @@
     state.career.transactions.push({ ...result, season: state.career.seasonNumber + 1, age: state.career.age + 1 });
     renderSeason();
     saveGame();
-    showToast(`交易达成 · ${result.fitDescription}`);
+    showMovementResultModal(result, false);
   }
 
   function advanceCareer() {
     if (!state.career || !['ended', 'champion'].includes(state.season.stage)) return;
+    if (state.career.pendingOffseason) {
+      if (state.career.pendingOffseason.type === 'free-agency') showFreeAgencyModal();
+      if (state.career.pendingOffseason.type === 'involuntary-trade') showMovementResultModal(state.career.pendingOffseason.movement, true);
+      return;
+    }
     const completedSeason = archiveCareerSeason();
     if (state.career.seasonNumber >= CAREER_SEASONS || state.career.forcedRetirement) {
       state.career.completed = true;
@@ -2379,13 +2607,15 @@
     }
     const nextAge = state.career.age + 1;
     const development = applyCareerDevelopment(nextAge);
-    const movement = processCareerMovement(completedSeason, nextAge, state.season.tradeRequested);
-    syncUserLeaguePlayer();
-    const leagueUpdate = evolveLeagueSeason(ensureLeagueState(), state.career.seasonNumber + 1);
-    state.career.seasonNumber += 1;
-    state.career.age = nextAge;
-    state.career.lastOffseasonNote = `${development.text}${movement ? ` · ${movement.text}` : ' · 球队阵容保持稳定'} · 联盟${leagueUpdate.retired}人退役，${leagueUpdate.rookies}名新秀入盟，完成${leagueUpdate.transactions}笔签约或交易`;
-    initializeCareerSeason();
+    const result = processCareerMovement(completedSeason, nextAge, state.season.tradeRequested);
+    if (state.career.pendingOffseason) state.career.pendingOffseason.development = development;
+    if (result.status === 'pending') {
+      if (result.type === 'free-agency') showFreeAgencyModal();
+      if (result.type === 'involuntary-trade') showMovementResultModal(result.movement, true);
+      saveGame();
+      return;
+    }
+    finalizeOffseason({ nextAge, development, movement: result.movement });
   }
 
   function careerStanding() {
@@ -2763,9 +2993,8 @@
     return `
       <section class="season-panel">
         <h2>第 ${state.career.seasonNumber} 季落幕</h2>
-        <p class="confirm-copy">${reason}。赛季数据将写入生涯履历，随后自动处理成长、合同与球队变动。</p>
+        <p class="confirm-copy">${reason}。赛季数据将写入生涯履历；若发生交易或合同到期，将由我确认下一步。</p>
         ${playoffRows ? `<div class="playoff-bracket">${playoffRows}</div>` : ''}
-        ${tradeResultHTML()}
         <div class="season-actions offseason-actions">
           <button class="secondary-btn" type="button" data-action="career-history">查看生涯数据</button>
           ${tradeButtonHTML()}
@@ -2780,7 +3009,6 @@
         <img src="${team.logo}" alt="${team.name}队标">
         <h2>联盟总冠军</h2>
         <p>${team.name} · ${state.finalOVR} OVR · ${state.archetype.label}</p>
-        ${tradeResultHTML()}
         <div class="season-actions offseason-actions">
           <button class="secondary-btn" type="button" data-action="career-history">查看生涯数据</button>
           ${tradeButtonHTML()}
@@ -2791,15 +3019,84 @@
 
   function tradeButtonHTML() {
     if (state.career.seasonNumber >= CAREER_SEASONS || state.career.forcedRetirement) return '';
+    if (state.career.contract.yearsRemaining <= 1) return '<button class="trade-btn" type="button" disabled>合同到期 · 即将进入自由市场</button>';
     const result = state.season.tradeResult;
     const label = !state.season.tradeRequested ? '申请交易' : (result?.approved ? '交易申请已获批' : '交易申请被拒绝');
     return `<button class="trade-btn" type="button" data-action="request-trade" ${state.season.tradeRequested ? 'disabled' : ''}>${label}</button>`;
   }
 
-  function tradeResultHTML() {
-    if (!state.season.tradeResult) return '';
-    const approved = state.season.tradeResult.approved !== false;
-    return `<div class="trade-request-result${approved ? '' : ' is-rejected'}"><b>${approved ? '交易达成' : '申请被拒'}</b><span>${state.season.tradeResult.text}</span></div>`;
+  function movementTeamHTML(teamId, label) {
+    const team = DATA.getTeam(teamId);
+    return `<div class="movement-team"><span>${label}</span><img src="${team.logo}" alt=""><b>${team.name}</b></div>`;
+  }
+
+  function showMovementResultModal(result, continueOffseason) {
+    if (!result) return;
+    if (result.approved === false) {
+      modalRoot.innerHTML = `
+        <section class="modal movement-modal" role="dialog" aria-modal="true" aria-labelledby="movement-title">
+          <header class="modal-head"><h2 id="movement-title">交易申请未通过</h2></header>
+          <div class="modal-body">
+            <div class="movement-verdict is-rejected"><b>管理层拒绝放人</b><p>${result.text}</p></div>
+            <div class="movement-facts"><div><span>球队关系</span><b>大幅下降</b></div><div><span>下赛季处罚</span><b>-${result.minutesPenalty} 分钟</b></div></div>
+            <button class="primary-btn" type="button" data-action="acknowledge-movement">我知道了</button>
+          </div>
+        </section>`;
+      return;
+    }
+    const projection = projectedUserRole(result.teamId);
+    const reasons = result.tradeReasons || [result.fitDescription || '双方根据阵容需求完成交易'];
+    const oldTeamId = result.fromTeamId;
+    modalRoot.innerHTML = `
+      <section class="modal movement-modal" role="dialog" aria-modal="true" aria-labelledby="movement-title">
+        <header class="modal-head"><h2 id="movement-title">${result.type === '申请交易' ? '交易申请获批' : '球队正式通知：我被交易'}</h2></header>
+        <div class="modal-body">
+          <div class="movement-route">${movementTeamHTML(oldTeamId, '离开')}<i>→</i>${movementTeamHTML(result.teamId, '加盟')}</div>
+          <div class="movement-verdict"><b>${reasons.join(' · ')}</b><p>${result.text}</p></div>
+          <div class="movement-facts">
+            <div><span>交易筹码</span><b>${result.playerName} · ${result.playerOVR} OVR</b></div>
+            <div><span>交易价值差</span><b>${result.valueDifference}</b></div>
+            <div><span>预计角色</span><b>${projection.role}</b></div>
+            <div><span>预计时间</span><b>${projection.minutes} 分钟</b></div>
+          </div>
+          ${result.protections?.length ? `<p class="movement-protection">球队权衡过：${result.protections.join('、')}，但阵容调整动机更强。</p>` : ''}
+          <button class="primary-btn" type="button" data-action="${continueOffseason ? 'confirm-offseason-movement' : 'acknowledge-movement'}">${continueOffseason ? '确认并前往新球队' : '确认交易结果'}</button>
+        </div>
+      </section>`;
+  }
+
+  function offerRosterHTML(offer) {
+    return offer.roster.map(player => `<span><b>${player.name}</b><small>${player.positions.join('/')} · ${player.ovr} OVR · ${player.age} 岁</small></span>`).join('');
+  }
+
+  function contractOfferHTML(offer) {
+    const team = DATA.getTeam(offer.teamId);
+    const competition = offer.projection.competitors.length
+      ? offer.projection.competitors.map(player => `${player.name} ${player.ovr}`).join('、')
+      : '同位置暂无主要竞争者';
+    return `<article class="contract-offer${offer.isCurrentTeam ? ' is-current' : ''}">
+      <header><img src="${team.logo}" alt=""><div><span>${offer.isCurrentTeam ? '母队续约报价' : offer.phase}</span><h3>${team.name}</h3><p>上赛季${team.conference === 'EAST' ? '东部' : '西部'}第 ${offer.rank} · ${offer.wins}-${offer.losses}</p></div><strong>${offer.years} 年<br><small>$${offer.annualSalary}M / 年</small></strong></header>
+      <div class="offer-role-grid"><div><span>预计角色</span><b>${offer.projection.role}</b></div><div><span>预计时间</span><b>${offer.projection.minutes} 分钟</b></div><div><span>预计球权</span><b>${offer.projection.usage}%</b></div><div><span>轮换顺位</span><b>第 ${offer.projection.rotationRank} 位</b></div></div>
+      <p class="offer-competition"><b>位置竞争：</b>${competition}</p>
+      <details><summary>查看主要球员名单</summary><div class="offer-roster">${offerRosterHTML(offer)}</div></details>
+      <button class="primary-btn" type="button" data-action="choose-contract" data-team="${offer.teamId}">接受${offer.isCurrentTeam ? '续约' : '报价'}</button>
+    </article>`;
+  }
+
+  function showFreeAgencyModal() {
+    const pending = state.career?.pendingOffseason;
+    if (!pending || pending.type !== 'free-agency') return;
+    const offers = pending.offers || [];
+    const noOffers = !offers.length;
+    modalRoot.innerHTML = `
+      <section class="modal free-agency-modal" role="dialog" aria-modal="true" aria-labelledby="free-agency-title">
+        <header class="modal-head"><div><span class="modal-kicker">FREE AGENCY</span><h2 id="free-agency-title">自由市场合同报价</h2></div><b class="offer-count">${offers.length} 份</b></header>
+        <div class="modal-body">
+          ${offers.length ? `<p class="market-intro">合同到期。请根据阵容、球队竞争力和预计上场时间选择下一站，确认后将直接进入新赛季。</p><div class="contract-offer-list">${offers.map(contractOfferHTML).join('')}</div>` : `
+            <div class="no-offer-state"><b>目前没有球队提供合同</b><p>${pending.waitUsed ? '第二轮市场评估仍无人报价，我的联盟生涯将提前结束。' : '可以等待市场完成补强后重新评估一次，但合同年限和薪资通常会下降。'}</p></div>
+            <button class="${pending.waitUsed ? 'danger-btn' : 'primary-btn'}" type="button" data-action="${pending.waitUsed ? 'retire-no-offers' : 'wait-contract-market'}">${pending.waitUsed ? '确认提前退役' : '等待市场'}</button>`}
+        </div>
+      </section>`;
   }
 
   function recordChampionship() {
@@ -2845,7 +3142,7 @@
     ['建球员', '14 项属性', '选择位置后随机抽取球队，从该队球员中选一人，再点击属性槽夺取一项能力。球员可拥有多个现实适配位置；相距一至四档时，普通属性依次衰减 3%、8%、14%、30%，潜力不衰减。潜力表示年轻阶段每年触发能力提升的概率，不代表巅峰总评。'],
     ['赛季', '82 场征程', '球队根据我的能力、队内竞争和球权分配决定上场时间与使用率，两者会共同影响场均数据。联盟所有球员使用同一套伤病概率：高负荷会提高风险；轻伤暂时降低能力，重伤和毁灭性伤病会造成永久影响或提前退役。'],
     ['季后赛', '七场四胜', '常规赛前六名直通季后赛，七至十名参加附加赛。季后赛包含首轮、分区半决赛、分区决赛和总决赛，能力越强，晋级概率越高。'],
-    ['结算', '独一无二', '赛季结束后可以申请交易，但管理层可能拒绝；被拒后，下赛季轮换时间会明显下降。获批交易不会重复使用历史交易筹码，也会回避短期内重返旧队。生涯进度、伤病与冠军记录保存在当前浏览器中。'],
+    ['结算', '独一无二', '赛季结束后可以申请交易，但管理层可能拒绝；被拒后，下赛季轮换时间会明显下降。球队也会根据年龄、潜力、队史贡献、换队历史与阵容方向决定是否交易我。合同到期后可能收到 0 至 3 份报价，可比较球队名单、上季排名与预计上场时间后选择。'],
     ['荣誉墙', '征服联盟', '每带领一支球队夺冠，荣誉墙就会点亮对应队标。点击已点亮的球队，可查看历次冠军建模、赛季战绩和场均表现。']
   ];
 
@@ -2952,6 +3249,11 @@
       if (!Number.isFinite(state.career.tradeRequestFailures)) state.career.tradeRequestFailures = 0;
       if (!Array.isArray(state.career.tradeCounterpartIds)) state.career.tradeCounterpartIds = [];
       if (!Array.isArray(state.career.recentDepartures)) state.career.recentDepartures = [];
+      if (!state.career.teamRelationships || typeof state.career.teamRelationships !== 'object') state.career.teamRelationships = {};
+      state.career.teamsPlayed.forEach(teamId => {
+        if (!Number.isFinite(state.career.teamRelationships[teamId])) state.career.teamRelationships[teamId] = teamId === state.career.currentTeam ? 65 : 50;
+      });
+      if (!state.career.pendingOffseason || !['free-agency', 'involuntary-trade'].includes(state.career.pendingOffseason.type)) state.career.pendingOffseason = null;
       if (!Number.isFinite(state.career.minutesPenaltyNextSeason)) state.career.minutesPenaltyNextSeason = 0;
       state.career.forcedRetirement = Boolean(state.career.forcedRetirement);
       const league = ensureLeagueState();
@@ -2976,6 +3278,8 @@
       state.season.seriesSimulation = null;
     }
     showScreen(saved.resumeScreen || saved.screen);
+    if (state.career?.pendingOffseason?.type === 'free-agency') showFreeAgencyModal();
+    if (state.career?.pendingOffseason?.type === 'involuntary-trade') showMovementResultModal(state.career.pendingOffseason.movement, true);
   }
 
   function showToast(message) {
@@ -3037,6 +3341,11 @@
     if (action === 'career-history') showCareerHistory();
     if (action === 'request-trade') requestTrade();
     if (action === 'advance-career') advanceCareer();
+    if (action === 'acknowledge-movement') closeModal();
+    if (action === 'confirm-offseason-movement') confirmOffseasonMovement();
+    if (action === 'choose-contract') signContractOffer(element.dataset.team);
+    if (action === 'wait-contract-market') waitForContractMarket();
+    if (action === 'retire-no-offers') retireWithoutContract();
   }
 
   document.addEventListener('click', event => {
@@ -3089,6 +3398,7 @@
   const injuryDebug = debugParams.get('injuryOutcome');
   const tradeDebug = debugParams.get('tradeTest') === '1';
   const legacyDebug = debugParams.get('legacyTest') === '1';
+  const offseasonDebug = debugParams.get('offseasonTest');
   const isLocalDebug = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
   if (isLocalDebug) {
     window.__GAME_DEBUG__ = {
@@ -3140,7 +3450,14 @@
     debugCareerMode = true;
     state = buildDebugCareerState(debugSeason);
     renderSeason();
-    if (tradeDebug) requestTrade();
+    if (tradeDebug) {
+      state.career.contract.yearsRemaining = 2;
+      requestTrade();
+    }
+    if (['freeagency', 'trade'].includes(offseasonDebug)) {
+      state.career.contract.yearsRemaining = offseasonDebug === 'freeagency' ? 1 : 2;
+      advanceCareer();
+    }
     if (legacyDebug && debugSeason === 20) advanceCareer();
   } else {
     renderHome();

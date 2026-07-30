@@ -84,6 +84,44 @@ test('trade value rewards youth and penalizes aging contracts', () => {
   assert.ok(SIM.tradeValue({ ovr: 94, age: 28, potential: 80, contractYears: 2 }) > young);
 });
 
+test('young high-potential and franchise players receive trade protection', () => {
+  const youngCore = SIM.calculateTradeProbability({
+    age: 22, ovr: 86, potential: 94, contractYears: 3, teamTenure: 4,
+    teamsPlayed: 1, recentMoves: 0, franchiseScore: 60, teamWins: 45, seasonsSinceMove: 4
+  });
+  const franchiseIcon = SIM.calculateTradeProbability({
+    age: 30, ovr: 92, potential: 82, contractYears: 2, teamTenure: 11,
+    teamsPlayed: 1, recentMoves: 0, franchiseScore: 190, championships: 2, majorAwards: 2,
+    teamWins: 52, relationship: 90, seasonsSinceMove: 11
+  });
+  assert.ok(youngCore.chance <= 0.03);
+  assert.ok(franchiseIcon.chance <= 0.02);
+  assert.ok(youngCore.protections.includes('年轻高潜核心'));
+  assert.ok(franchiseIcon.protections.includes('队史第一人级贡献'));
+});
+
+test('journeyman history and roster mismatch increase trade probability', () => {
+  const stable = SIM.calculateTradeProbability({
+    age: 29, ovr: 81, potential: 74, contractYears: 2, teamTenure: 5,
+    teamsPlayed: 2, recentMoves: 0, franchiseScore: 70, teamWins: 44, seasonsSinceMove: 5
+  });
+  const journeyman = SIM.calculateTradeProbability({
+    age: 33, ovr: 78, potential: 68, contractYears: 3, teamTenure: 2,
+    teamsPlayed: 6, recentMoves: 3, franchiseScore: 12, teamWins: 31,
+    replacementPressure: 12, directionMismatch: 8, relationship: 30, seasonsSinceMove: 2
+  });
+  assert.ok(journeyman.chance > stable.chance + 0.25);
+  assert.ok(journeyman.risks.includes('生涯换队较多'));
+  assert.ok(journeyman.risks.includes('近期流动频繁'));
+});
+
+test('contract market value can fall below the offer threshold', () => {
+  const star = SIM.contractMarketValue({ ovr: 91, age: 27, potential: 82, availability: 0.95 });
+  const decliningReserve = SIM.contractMarketValue({ ovr: 68, age: 36, potential: 60, availability: 0.45 });
+  assert.ok(star > 60);
+  assert.ok(decliningReserve < 10);
+});
+
 function careerFixture(overrides = {}) {
   const history = Array.from({ length: 20 }, (_, index) => ({
     seasonNumber: index + 1,

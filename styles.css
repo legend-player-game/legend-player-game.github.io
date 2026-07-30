@@ -1597,26 +1597,6 @@ button.attribute-slot:not(:disabled):hover {
   cursor: pointer;
 }
 
-.trade-request-result {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  align-items: start;
-  margin: 16px 0 2px;
-  padding: 12px 14px;
-  border-left: 4px solid var(--gold);
-  background: #fff8d9;
-  color: #5f554b;
-  font-size: 12px;
-  line-height: 1.6;
-  text-align: left;
-}
-
-.trade-request-result b {
-  color: #7c5c0d;
-  white-space: nowrap;
-}
-
 .season-hero > div {
   min-width: 0;
 }
@@ -1668,15 +1648,6 @@ button.attribute-slot:not(:disabled):hover {
   color: var(--muted);
   font-size: 9px;
   font-weight: 500;
-}
-
-.trade-request-result.is-rejected {
-  border-left-color: #b94136;
-  background: #fff0ec;
-}
-
-.trade-request-result.is-rejected b {
-  color: #9f2f27;
 }
 
 .playoff-bracket {
@@ -1848,6 +1819,258 @@ button.attribute-slot:not(:disabled):hover {
 
 .modal-body {
   padding: 18px;
+}
+
+.movement-modal,
+.free-agency-modal {
+  width: min(100%, 720px);
+}
+
+.movement-route {
+  display: grid;
+  grid-template-columns: 1fr 34px 1fr;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.movement-route > i {
+  color: var(--orange);
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-style: normal;
+  text-align: center;
+}
+
+.movement-team {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.movement-team span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.movement-team img {
+  grid-row: 2;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.movement-team b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.movement-verdict {
+  margin-bottom: 14px;
+  padding: 14px;
+  border-left: 4px solid var(--orange);
+  background: rgba(255, 253, 248, 0.82);
+}
+
+.movement-verdict.is-rejected {
+  border-left-color: #b63b32;
+}
+
+.movement-verdict p,
+.movement-protection,
+.market-intro,
+.no-offer-state p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.movement-facts,
+.offer-role-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+}
+
+.movement-facts > div,
+.offer-role-grid > div {
+  min-width: 0;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+}
+
+.movement-facts > div:last-child,
+.offer-role-grid > div:last-child {
+  border-right: 0;
+}
+
+.movement-facts span,
+.movement-facts b,
+.offer-role-grid span,
+.offer-role-grid b {
+  display: block;
+}
+
+.movement-facts span,
+.offer-role-grid span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.movement-facts b,
+.offer-role-grid b {
+  margin-top: 3px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.movement-protection {
+  margin: 0 0 14px;
+}
+
+.modal-kicker {
+  display: block;
+  color: var(--orange);
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+}
+
+.offer-count {
+  color: var(--orange-dark);
+  font-family: var(--font-display);
+}
+
+.market-intro {
+  margin: 0 0 14px;
+}
+
+.contract-offer-list {
+  display: grid;
+  gap: 12px;
+}
+
+.contract-offer {
+  padding: 14px;
+  border: 2px solid var(--line);
+  border-radius: 7px;
+  background: var(--white);
+}
+
+.contract-offer.is-current {
+  border-color: var(--mint);
+}
+
+.contract-offer > header {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.contract-offer > header img {
+  width: 50px;
+  height: 50px;
+  object-fit: contain;
+}
+
+.contract-offer > header span,
+.contract-offer > header p {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.contract-offer > header h3,
+.contract-offer > header p {
+  margin: 0;
+}
+
+.contract-offer > header h3 {
+  font-size: 17px;
+}
+
+.contract-offer > header strong {
+  color: var(--orange-dark);
+  font-family: var(--font-display);
+  text-align: right;
+}
+
+.contract-offer > header strong small {
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 9px;
+}
+
+.offer-competition {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.offer-competition b {
+  color: var(--ink);
+}
+
+.contract-offer details {
+  margin-bottom: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.contract-offer summary {
+  padding: 9px 0;
+  color: var(--orange-dark);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.offer-roster {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.offer-roster span {
+  min-width: 0;
+  padding: 7px;
+  background: var(--paper);
+}
+
+.offer-roster b,
+.offer-roster small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.offer-roster b { font-size: 11px; }
+.offer-roster small { color: var(--muted); font-size: 9px; }
+
+.no-offer-state {
+  margin-bottom: 16px;
+  padding: 24px 18px;
+  border: 1px dashed var(--line);
+  text-align: center;
+}
+
+.danger-btn {
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 7px;
+  color: white;
+  background: #a63a32;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .help-tabs {
@@ -2384,6 +2607,21 @@ button.attribute-slot:not(:disabled):hover {
 }
 
 @media (max-width: 620px) {
+  .movement-facts,
+  .offer-role-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .movement-facts > div:nth-child(2),
+  .offer-role-grid > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .movement-facts > div:nth-child(-n+2),
+  .offer-role-grid > div:nth-child(-n+2) {
+    border-bottom: 1px solid var(--line);
+  }
+
   .career-season-toolbar {
     grid-template-columns: 1fr 1fr;
   }
@@ -2461,6 +2699,52 @@ button.attribute-slot:not(:disabled):hover {
 }
 
 @media (max-width: 420px) {
+  .modal-root {
+    padding: 8px;
+  }
+
+  .movement-route {
+    grid-template-columns: 1fr 24px 1fr;
+  }
+
+  .movement-team {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 4px 6px;
+  }
+
+  .movement-team img {
+    width: 36px;
+    height: 36px;
+  }
+
+  .movement-team b {
+    font-size: 12px;
+  }
+
+  .contract-offer {
+    padding: 10px;
+  }
+
+  .contract-offer > header {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .contract-offer > header img {
+    width: 40px;
+    height: 40px;
+  }
+
+  .contract-offer > header strong {
+    grid-column: 1 / -1;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    text-align: left;
+  }
+
+  .offer-roster {
+    grid-template-columns: 1fr;
+  }
+
   .season-screen {
     padding-inline: 12px;
   }
@@ -2604,11 +2888,6 @@ button.attribute-slot:not(:disabled):hover {
   .reveal-actions,
   .season-actions {
     grid-template-columns: 1fr;
-  }
-
-  .trade-request-result {
-    grid-template-columns: 1fr;
-    gap: 2px;
   }
 
   .season-hero {

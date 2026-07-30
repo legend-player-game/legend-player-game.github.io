@@ -120,6 +120,106 @@
     return Math.round(Math.max(1, production + upside + ageAdjustment + control) * 10) / 10;
   }
 
+  function calculateTradeProbability(profile) {
+    const age = Number(profile?.age) || 27;
+    const ovr = Number(profile?.ovr) || 75;
+    const potential = Number(profile?.potential) || 70;
+    const contractYears = clamp(Number(profile?.contractYears) || 1, 1, 5);
+    const teamTenure = Math.max(0, Number(profile?.teamTenure) || 0);
+    const teamsPlayed = Math.max(1, Number(profile?.teamsPlayed) || 1);
+    const recentMoves = Math.max(0, Number(profile?.recentMoves) || 0);
+    const franchiseScore = Math.max(0, Number(profile?.franchiseScore) || 0);
+    const championships = Math.max(0, Number(profile?.championships) || 0);
+    const majorAwards = Math.max(0, Number(profile?.majorAwards) || 0);
+    const teamWins = Number(profile?.teamWins) || 41;
+    const replacementPressure = clamp(Number(profile?.replacementPressure) || 0, 0, 20);
+    const directionMismatch = clamp(Number(profile?.directionMismatch) || 0, 0, 14);
+    const relationship = clamp(Number(profile?.relationship) || 50, 0, 100);
+    const seasonsSinceMove = Math.max(0, Number(profile?.seasonsSinceMove) || 99);
+    const protections = [];
+    const risks = [];
+    let chance = 0.085;
+
+    if (age <= 25 && potential >= 86) {
+      const protection = 0.09 + (potential - 86) * 0.004;
+      chance -= protection;
+      protections.push('年轻高潜核心');
+    }
+    if (teamTenure >= 5) {
+      chance -= Math.min(0.11, (teamTenure - 4) * 0.018);
+      protections.push(teamTenure >= 9 ? '长期功勋球员' : '长期效力本队');
+    }
+    if (franchiseScore >= 150) {
+      chance -= 0.13;
+      protections.push('队史第一人级贡献');
+    } else if (franchiseScore >= 85) {
+      chance -= 0.07;
+      protections.push('队史代表球员');
+    }
+    if (championships > 0 || majorAwards > 0) {
+      chance -= Math.min(0.09, championships * 0.035 + majorAwards * 0.018);
+      protections.push(championships ? '冠军功勋' : '核心荣誉积累');
+    }
+    if (seasonsSinceMove <= 1) {
+      chance -= 0.1;
+      protections.push('刚刚加盟球队');
+    }
+    if (relationship >= 75) {
+      chance -= (relationship - 70) * 0.0015;
+      protections.push('球队关系稳固');
+    }
+
+    if (teamsPlayed >= 4) {
+      chance += Math.min(0.12, (teamsPlayed - 3) * 0.025);
+      risks.push('生涯换队较多');
+    }
+    if (recentMoves >= 2) {
+      chance += Math.min(0.11, (recentMoves - 1) * 0.045);
+      risks.push('近期流动频繁');
+    }
+    if (age >= 32 && contractYears >= 2) {
+      chance += (age - 31) * 0.012 + (contractYears - 1) * 0.018;
+      risks.push('老将合同风险');
+    }
+    if (teamWins < 35) {
+      chance += Math.min(0.065, (35 - teamWins) * 0.004);
+      risks.push('球队进入调整周期');
+    }
+    if (replacementPressure > 0) {
+      chance += replacementPressure * 0.008;
+      risks.push('同位置竞争拥挤');
+    }
+    if (directionMismatch > 0) {
+      chance += directionMismatch * 0.008;
+      risks.push('与球队建队方向不匹配');
+    }
+    if (relationship <= 35) {
+      chance += (40 - relationship) * 0.003;
+      risks.push('与管理层关系紧张');
+    }
+    if (ovr < 76 && age >= 28) {
+      chance += Math.min(0.08, (76 - ovr) * 0.012);
+      risks.push('轮换价值下降');
+    }
+
+    return {
+      chance: Math.round(clamp(chance, 0.01, 0.45) * 1000) / 1000,
+      protections: [...new Set(protections)],
+      risks: [...new Set(risks)]
+    };
+  }
+
+  function contractMarketValue(player) {
+    const ovr = Number(player?.ovr) || 60;
+    const age = Number(player?.age) || 27;
+    const potential = Number(player?.potential) || 70;
+    const availability = clamp(Number(player?.availability) || 1, 0, 1);
+    const base = (ovr - 67) * 3.1;
+    const upside = age <= 25 ? Math.max(0, potential - 70) * 0.55 : 0;
+    const decline = Math.max(0, age - 32) * 3.2;
+    return Math.round((base + upside - decline) * (0.55 + availability * 0.45) * 10) / 10;
+  }
+
   function calculateCareerLegacy(career) {
     const history = Array.isArray(career?.history) ? career.history : [];
     const totals = career?.totals || {};
@@ -212,6 +312,8 @@
     conferenceSeeds,
     seriesWinProbability,
     tradeValue,
+    calculateTradeProbability,
+    contractMarketValue,
     calculateCareerLegacy,
     auditLeague
   };
