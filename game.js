@@ -793,7 +793,7 @@
     return { minutes, usage, role, rotationRank, penalty, teamRotationAverage: Math.round(teamRotationAverage * 10) / 10 };
   }
 
-  function initializeCareerSeason() {
+  function initializeCareerSeason({ deferSimulation = false } = {}) {
     const league = ensureLeagueState();
     syncUserLeaguePlayer();
     state.careerTeam = state.career.currentTeam;
@@ -819,7 +819,7 @@
       series: [],
       postSeasonStage: null,
       awards: [],
-      isSimulating: true,
+      isSimulating: !deferSimulation,
       playInSimulation: null,
       seriesSimulation: null,
       tradeRequested: false,
@@ -830,9 +830,11 @@
       offseasonNote: state.career.lastOffseasonNote
     };
     showScreen('season');
-    window.setTimeout(() => {
-      if (state.screen === 'season' && state.season && state.season.stage === 'regular') runRegularSeasonAnimation();
-    }, 600);
+    if (!deferSimulation) {
+      window.setTimeout(() => {
+        if (state.screen === 'season' && state.season && state.season.stage === 'regular') runRegularSeasonAnimation();
+      }, 600);
+    }
   }
 
   function teamStrength(teamId) {
@@ -851,6 +853,15 @@
     }
     const roster = DATA.PLAYERS[teamId] || [];
     return roster.length ? roster.reduce((sum, player) => sum + player.ovr, 0) / roster.length : 60;
+  }
+
+  function playoffTeamStrength(teamId) {
+    if (!state.career?.league) return teamStrength(teamId);
+    const currentGame = (state.season?.wins || 0) + (state.season?.losses || 0) + 1;
+    const rotation = state.career.league.players
+      .filter(player => player.active && player.teamId === teamId && playerAvailableForGame(player, currentGame))
+      .map(player => ({ effectiveOvr: leaguePlayerGameOVR(player, currentGame) }));
+    return SIM.calculatePlayoffTeamStrength(rotation);
   }
 
   function randomNormal() {
@@ -2053,7 +2064,7 @@
   function simulatePlayIn() {
     if (state.season.stage !== 'playin' || state.season.playInSimulation) return;
     const opponent = selectPostseasonOpponent(false);
-    const chance = SIM.seriesWinProbability(teamStrength(state.careerTeam), teamStrength(opponent), 0);
+    const chance = SIM.seriesWinProbability(playoffTeamStrength(state.careerTeam), playoffTeamStrength(opponent), 0);
     state.season.playInSimulation = { opponent, quarter: 0, myScore: 0, theirScore: 0 };
     renderSeason();
     const timer = startSimulationTimer(() => {
@@ -2146,7 +2157,7 @@
     const [left, right] = matchup.teams;
     let leftWins = 0;
     let rightWins = 0;
-    const chance = SIM.seriesWinProbability(teamStrength(left), teamStrength(right), round);
+    const chance = SIM.seriesWinProbability(playoffTeamStrength(left), playoffTeamStrength(right), round);
     while (leftWins < 4 && rightWins < 4) {
       if (random() < chance) leftWins += 1;
       else rightWins += 1;
@@ -2215,7 +2226,7 @@
     renderSeason();
     const timer = startSimulationTimer(() => {
       const sim = state.season.seriesSimulation;
-      const gameChance = SIM.seriesWinProbability(teamStrength(state.careerTeam), teamStrength(opponent), round);
+      const gameChance = SIM.seriesWinProbability(playoffTeamStrength(state.careerTeam), playoffTeamStrength(opponent), round);
       const forcedSeriesOutcome = localDebugParam('seriesOutcome');
       const wonGame = forcedSeriesOutcome === 'win' || (forcedSeriesOutcome !== 'loss' && random() < gameChance);
       advanceInjuryRecovery();
@@ -2360,6 +2371,7 @@
 
   function applyCareerDevelopment(nextAge) {
     const before = state.finalOVR;
+    const beforeAttrs = Object.fromEntries(DATA.ATTRS.map(([key]) => [key, state.attrs[key]]));
     const growthChance = potentialGrowthChance(state.career.potential, nextAge);
     const growthTriggered = nextAge <= 30 && random() < growthChance;
     const potentialFactor = clamp((state.career.potential - 40) / 59, 0, 1);
@@ -2386,6 +2398,13 @@
       before,
       after: state.finalOVR,
       delta,
+      attributes: DATA.ATTRS.map(([key, name]) => ({
+        key,
+        name,
+        before: beforeAttrs[key],
+        after: state.attrs[key],
+        delta: state.attrs[key] - beforeAttrs[key]
+      })),
       text: delta > 0
         ? `潜力兑现，能力成长 ${before} → ${state.finalOVR}`
         : (delta < 0 ? `年龄影响 ${before} → ${state.finalOVR}` : `本年未触发成长，能力维持 ${state.finalOVR}`)
@@ -2482,9 +2501,12 @@
     state.career.seasonNumber += 1;
     state.career.age = pending.nextAge;
     state.career.pendingOffseason = null;
+    state.career.pendingDevelopmentReview = pending.development;
     state.career.lastOffseasonNote = `${pending.development.text}${movement ? ` · ${movement.text}` : ' · 球队阵容保持稳定'} · 联盟${leagueUpdate.retired}人退役，${leagueUpdate.rookies}名新秀入盟，完成${leagueUpdate.transactions}笔签约或交易`;
     closeModal();
-    initializeCareerSeason();
+    initializeCareerSeason({ deferSimulation: true });
+    showDevelopmentModal(pending.development);
+    saveGame();
   }
 
   function signContractOffer(teamId) {
@@ -3047,6 +3069,44 @@
     return `<div class="movement-team"><span>${label}</span><img src="${team.logo}" alt=""><b>${team.name}</b></div>`;
   }
 
+  function developmentDeltaHTML(delta) {
+    if (delta > 0) return `<small class="development-delta is-up">+${delta}</small>`;
+    if (delta < 0) return `<small class="development-delta is-down">${delta}</small>`;
+    return '<small class="development-delta is-flat">0</small>';
+  }
+
+  function showDevelopmentModal(development) {
+    if (!development) return;
+    const attributes = Array.isArray(development.attributes)
+      ? development.attributes
+      : DATA.ATTRS.map(([key, name]) => ({ key, name, before: state.attrs[key], after: state.attrs[key], delta: 0 }));
+    const role = state.season?.roleProfile?.role || '等待球队安排';
+    modalRoot.innerHTML = `
+      <section class="modal development-modal" role="dialog" aria-modal="true" aria-labelledby="development-title">
+        <header class="modal-head"><div><span class="modal-kicker">OFFSEASON REPORT</span><h2 id="development-title">休赛期训练报告</h2></div><b class="development-overall">${development.after} OVR</b></header>
+        <div class="modal-body">
+          <div class="development-summary">
+            <div><span>年龄</span><b>${state.career.age} 岁</b></div>
+            <div><span>球队角色</span><b>${role}</b></div>
+            <div><span>总评变化</span><b>${development.before} → ${development.after} ${developmentDeltaHTML(development.delta)}</b></div>
+          </div>
+          <div class="development-attributes">
+            ${attributes.map(attribute => `<div><span>${attribute.name}</span><b>${attribute.after}</b>${developmentDeltaHTML(attribute.delta)}</div>`).join('')}
+          </div>
+          <p class="development-note">${development.text}</p>
+          <button class="primary-btn" type="button" data-action="confirm-development">确认并开始新赛季</button>
+        </div>
+      </section>`;
+  }
+
+  function confirmDevelopmentReview() {
+    if (!state.career?.pendingDevelopmentReview) return;
+    state.career.pendingDevelopmentReview = null;
+    closeModal();
+    saveGame();
+    if (state.season?.stage === 'regular' && !state.season.isSimulating) runRegularSeasonAnimation();
+  }
+
   function showMovementResultModal(result, continueOffseason) {
     if (!result) return;
     if (result.approved === false) {
@@ -3311,6 +3371,7 @@
     showScreen(saved.resumeScreen || saved.screen);
     if (state.career?.pendingOffseason?.type === 'free-agency') showFreeAgencyModal();
     if (state.career?.pendingOffseason?.type === 'involuntary-trade') showMovementResultModal(state.career.pendingOffseason.movement, true);
+    if (!state.career?.pendingOffseason && state.career?.pendingDevelopmentReview) showDevelopmentModal(state.career.pendingDevelopmentReview);
   }
 
   function showToast(message) {
@@ -3374,6 +3435,7 @@
     if (action === 'advance-career') advanceCareer();
     if (action === 'acknowledge-movement') closeModal();
     if (action === 'confirm-offseason-movement') confirmOffseasonMovement();
+    if (action === 'confirm-development') confirmDevelopmentReview();
     if (action === 'choose-contract') signContractOffer(element.dataset.team);
     if (action === 'wait-contract-market') waitForContractMarket();
     if (action === 'retire-no-offers') retireWithoutContract();
@@ -3400,7 +3462,10 @@
   });
 
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && modalRoot.childElementCount) closeModal();
+    if (event.key === 'Escape' && modalRoot.childElementCount) {
+      if (state.career?.pendingDevelopmentReview) confirmDevelopmentReview();
+      else closeModal();
+    }
   });
 
   homeBtn.addEventListener('click', () => showScreen('home'));

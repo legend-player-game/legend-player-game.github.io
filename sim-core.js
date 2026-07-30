@@ -90,9 +90,35 @@
 
   function seriesWinProbability(ownStrength, opponentStrength, round) {
     const difference = ownStrength - opponentStrength;
-    const logistic = 1 / (1 + Math.exp(-difference / 7.5));
-    const roundPressure = Math.max(0, Number(round) || 0) * 0.008;
-    return clamp(logistic - Math.sign(difference) * roundPressure, 0.16, 0.84);
+    const logistic = 1 / (1 + Math.exp(-difference / 5.25));
+    const finalsParity = Math.max(0, Number(round) || 0) === 3 ? 0.012 : 0;
+    return clamp(logistic - Math.sign(difference) * finalsParity, 0.08, 0.92);
+  }
+
+  function calculatePlayoffTeamStrength(players) {
+    const rotation = (Array.isArray(players) ? players : [])
+      .map(player => Number(player?.effectiveOvr ?? player?.ovr) || 0)
+      .filter(value => value > 0)
+      .sort((left, right) => right - left)
+      .slice(0, 8);
+    if (!rotation.length) return 60;
+    const minuteWeights = [40, 38, 35, 32, 28, 25, 22, 20].slice(0, rotation.length);
+    const totalMinutes = minuteWeights.reduce((sum, value) => sum + value, 0);
+    const rotationStrength = rotation.reduce((sum, value, index) => sum + value * minuteWeights[index], 0) / totalMinutes;
+    const starBonus = rotation.slice(0, 3).reduce((sum, value) => sum + Math.max(0, value - 87) * 0.16, 0);
+    const weakRotationPenalty = rotation.length < 7 ? (7 - rotation.length) * 0.8 : 0;
+    return Math.round((rotationStrength + starBonus - weakRotationPenalty) * 10) / 10;
+  }
+
+  function bestOfSevenWinProbability(gameWinProbability) {
+    const probability = clamp(Number(gameWinProbability) || 0, 0, 1);
+    const lossProbability = 1 - probability;
+    return probability ** 4 * (
+      1
+      + 4 * lossProbability
+      + 10 * lossProbability ** 2
+      + 20 * lossProbability ** 3
+    );
   }
 
   function ratingFromMilestones(value, milestones) {
@@ -342,6 +368,8 @@
     normalizeTeamRecords,
     conferenceSeeds,
     seriesWinProbability,
+    calculatePlayoffTeamStrength,
+    bestOfSevenWinProbability,
     tradeValue,
     calculateTradeProbability,
     contractMarketValue,

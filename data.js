@@ -273,36 +273,87 @@
 
   const CURRENT_ERA_START_YEAR = 2025;
 
-  function createPlayer(teamId, seed, currentRoster = false) {
+  const ERA_RATING_OVERRIDES = {
+    '2003': {
+      '凯文加内特': 98,
+      '蒂姆邓肯': 97,
+      '科比布莱恩特': 96,
+      '沙奎尔奥尼尔': 96,
+      '特雷西麦格雷迪': 96,
+      '阿伦艾弗森': 94,
+      '贾森基德': 93,
+      '德克诺维茨基': 93,
+      '杰梅因奥尼尔': 92,
+      '安德烈基里连科': 90,
+      '保罗皮尔斯': 91,
+      '雷阿伦': 91,
+      '文斯卡特': 90,
+      '史蒂夫纳什': 90,
+      '萨姆卡塞尔': 87,
+      '唐耶尔马歇尔': 83,
+      '詹姆斯波西': 82,
+      '埃里克丹皮尔': 82,
+      '布莱恩卡迪纳尔': 77
+    },
+    '2009': {
+      '勒布朗詹姆斯': 98,
+      '德维恩韦德': 97,
+      '科比布莱恩特': 97,
+      '德怀特霍华德': 95,
+      '克里斯保罗': 94,
+      '凯文杜兰特': 94,
+      '德克诺维茨基': 94,
+      '蒂姆邓肯': 93,
+      '卡梅隆安东尼': 93,
+      '凯文加内特': 92,
+      '史蒂夫纳什': 92,
+      '德隆威廉姆斯': 92,
+      '克里斯波什': 92,
+      '保罗皮尔斯': 91,
+      '布兰顿罗伊': 91,
+      '保罗加索尔': 91,
+      '埃曼努尔大卫吉诺比利': 90,
+      '雷阿伦': 89,
+      '德里克罗斯': 86,
+      '约什史密斯': 86,
+      '大卫李': 86,
+      '内内': 84,
+      '马克盖索': 84
+    }
+  };
+
+  function createPlayer(teamId, seed, currentRoster = false, eraKey = null) {
     const [name, listedPosition, archetype, ovr, potential, age, rookieYear] = seed;
+    const calibratedOvr = ERA_RATING_OVERRIDES[String(eraKey)]?.[normalizePlayerName(name)] ?? ovr;
+    const calibratedPotential = Math.max(potential ?? calibratedOvr, calibratedOvr);
     const profile = ARCHETYPES[archetype];
     const hash = hashName(name);
     const overrides = getPlayerAttributeOverrides(name);
     const positions = getPlayerPositions(name, listedPosition);
     const pos = positions[0];
-    const generatedCeiling = Math.min(96, ovr + 6);
+    const generatedCeiling = Math.min(99, calibratedOvr + 6);
     const attrs = {};
     ATTRS.forEach(([key], index) => {
       if (key === 'POT') {
-        attrs[key] = Math.max(40, Math.min(99, potential ?? (62 + hash % 31)));
+        attrs[key] = Math.max(40, Math.min(99, calibratedPotential ?? (62 + hash % 31)));
         return;
       }
       const jitter = ((hash >> (index % 16)) % 5) - 2;
       const roleValue = profile.values[index] * 0.68 + POSITION_ATTRIBUTE_BASELINES[pos][index] * 0.32;
-      attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (ovr - 85) * 0.85 + jitter)));
+      attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (calibratedOvr - 85) * 0.85 + jitter)));
     });
     Object.assign(attrs, overrides);
     const attributeOvr = Math.round(ATTRS.reduce((sum, [key], index) => (
       sum + (attrs[key] || 0) * POSITION_WEIGHTS[pos][index]
     ), 0));
-    // Official OVR remains the public rating anchor. The internal value only allows a
-    // small attributes-based adjustment, so archetype generation cannot inflate ratings.
-    const simOvr = Math.max(ovr - 2, Math.min(ovr + 2, Math.round(ovr * 0.85 + attributeOvr * 0.15)));
+    // Source OVR, plus any era calibration, remains the rating anchor. Attributes only
+    // make a small internal adjustment so archetype generation cannot inflate ratings.
+    const simOvr = Math.max(calibratedOvr - 2, Math.min(calibratedOvr + 2, Math.round(calibratedOvr * 0.85 + attributeOvr * 0.15)));
     const metadata = currentRoster
       ? (CURRENT_PLAYER_METADATA[normalizePlayerName(name)] || draftMetadata(name))
       : null;
     return {
-      name, pos, positions, archetype, archetypeLabel: profile.label, ovr, sourceOvr: ovr,
+      name, pos, positions, archetype, archetypeLabel: profile.label, ovr: calibratedOvr, sourceOvr: calibratedOvr,
       attributeOvr, simOvr, teamId,
       age: age ?? metadata?.age,
       rookieYear: rookieYear ?? metadata?.rookieYear,
@@ -348,7 +399,7 @@
     activeEra = era;
     activeTeams = era.teams;
     activePlayers = key === 'current' ? CURRENT_PLAYERS : Object.fromEntries(
-      era.teams.map(team => [team.id, (era.rosterSeeds[team.id] || []).map(seed => createPlayer(team.id, seed))])
+      era.teams.map(team => [team.id, (era.rosterSeeds[team.id] || []).map(seed => createPlayer(team.id, seed, false, String(key)))])
     );
     window.GAME_DATA.TEAMS = activeTeams;
     window.GAME_DATA.PLAYERS = activePlayers;

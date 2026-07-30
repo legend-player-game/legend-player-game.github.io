@@ -77,6 +77,23 @@ test('series probability responds to both teams', () => {
   assert.equal(SIM.seriesWinProbability(86, 86, 0), 0.5);
 });
 
+test('playoff strength rewards shortened rotations and multiple superstars', () => {
+  const contender = [95, 93, 91, 82, 80, 78, 76, 74].map(ovr => ({ ovr }));
+  const eighthSeed = [87, 84, 82, 81, 80, 78, 77, 76].map(ovr => ({ ovr }));
+  const contenderStrength = SIM.calculatePlayoffTeamStrength(contender);
+  const eighthSeedStrength = SIM.calculatePlayoffTeamStrength(eighthSeed);
+  const gameChance = SIM.seriesWinProbability(contenderStrength, eighthSeedStrength, 0);
+  const seriesChance = SIM.bestOfSevenWinProbability(gameChance);
+  assert.ok(contenderStrength > eighthSeedStrength + 5);
+  assert.ok(seriesChance > 0.9);
+});
+
+test('equal playoff teams remain a coin flip over seven games', () => {
+  const gameChance = SIM.seriesWinProbability(86, 86, 2);
+  assert.equal(gameChance, 0.5);
+  assert.ok(Math.abs(SIM.bestOfSevenWinProbability(gameChance) - 0.5) < 0.0001);
+});
+
 test('trade value rewards youth and penalizes aging contracts', () => {
   const young = SIM.tradeValue({ ovr: 86, age: 22, potential: 92, contractYears: 4 });
   const veteran = SIM.tradeValue({ ovr: 86, age: 35, potential: 70, contractYears: 3 });
