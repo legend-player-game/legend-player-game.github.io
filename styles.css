@@ -1508,6 +1508,38 @@ button.attribute-slot:not(:disabled):hover {
   color: var(--ink);
 }
 
+.all-nba-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.all-nba-result span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.all-nba-result b {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+.all-nba-result.is-selected {
+  border-color: rgba(202, 151, 28, 0.55);
+  background: rgba(255, 245, 190, 0.72);
+}
+
+.all-nba-result.is-selected b {
+  color: #8b6814;
+}
+
 .live-scoreboard {
   display: grid;
   grid-template-columns: 1fr auto 1fr;

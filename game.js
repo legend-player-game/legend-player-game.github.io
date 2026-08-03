@@ -2362,7 +2362,7 @@
       { label: '最佳防守球员', short: 'DPOY', winner: dpoy.name, detail: awardCandidate(dpoy, 'dpoy').detail, isUser: userDPOY, candidates: dpoyRank.map(player => awardCandidate(player, 'dpoy')), reason: '重点比较防守属性、抢断盖帽、篮板保护和球队胜场。' },
       { label: '年度最佳新秀', short: 'ROTY', winner: rookie.name, detail: awardCandidate(rookie, 'rookie').detail, isUser: userROTY, candidates: rookieRank.map(player => awardCandidate(player, 'rookie')), reason: '仅比较本届新秀的即时能力、数据产量和承担角色。' },
       { label: '常规赛得分王', short: 'SC', winner: scoring.name, detail: awardCandidate(scoring, 'scoring').detail, isUser: userScoring, candidates: scoringRank.map(player => awardCandidate(player, 'scoring')), reason: '以符合出勤门槛后的场均得分为首要依据。' },
-      { label: '最佳阵容', short: 'ALL', winner: allNba === '未入选' ? '评选结果' : '我', detail: allNba, isUser: allNba !== '未入选', candidates: allNbaProfiles.slice(0, 3).map(player => awardCandidate(player, 'allNba')), reason: '综合位置表现、个人数据、球队战绩和出勤率确定前三阵容。' }
+      { label: '我的最佳阵容', short: 'ALL', winner: allNba, detail: allNba, isUser: allNba !== '未入选', candidates: [], reason: '综合位置表现、个人数据、球队战绩和出勤率确定入选阵容。' }
     ];
     state.career.league.awardHistory = STATE.upsertSeasonRecord(state.career.league.awardHistory, {
       seasonNumber: state.career.seasonNumber,
@@ -3425,6 +3425,13 @@
         <div class="awards-heading"><span>REGULAR SEASON HONORS</span><h2>赛季关键奖项</h2><p>${nextLabel}</p></div>
         <div class="awards-grid">
           ${season.awards.map((award, index) => {
+            if (award.short === 'ALL') {
+              return `<article class="award-card award-card--all-nba${award.isUser ? ' is-user' : ''}" style="--award-delay:${index * 90}ms">
+                <header><span class="award-code">${award.short}</span><div><small>${award.label}</small><strong>${award.detail}</strong></div>${award.isUser ? '<b>我的荣誉</b>' : ''}</header>
+                <div class="all-nba-result${award.isUser ? ' is-selected' : ''}"><span>我的评选结果</span><b>${award.detail}</b></div>
+                <p class="award-reason"><b>评选依据</b>${award.reason}</p>
+              </article>`;
+            }
             const candidates = Array.isArray(award.candidates) && award.candidates.length
               ? award.candidates
               : [{ name: award.winner, detail: award.detail, isUser: award.isUser }];
