@@ -2064,6 +2064,36 @@ button.attribute-slot:not(:disabled):hover {
   color: #47382c;
 }
 
+.offer-franchise-history {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.offer-franchise-history p {
+  margin: 0;
+  color: #665b50;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.offer-franchise-history p b {
+  display: inline-block;
+  min-width: 58px;
+  margin-right: 6px;
+  color: var(--ink);
+}
+
+.offer-franchise-history .my-franchise-rank {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--orange-dark);
+  font-weight: 700;
+}
+
 .historical-unlock span {
   display: block;
   margin-bottom: 4px;

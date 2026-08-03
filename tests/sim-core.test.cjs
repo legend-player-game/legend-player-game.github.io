@@ -118,7 +118,7 @@ test('young high-potential and franchise players receive trade protection', () =
   const franchiseIcon = SIM.calculateTradeProbability({
     age: 30, ovr: 92, potential: 82, contractYears: 2, teamTenure: 11,
     teamsPlayed: 1, recentMoves: 0, franchiseScore: 190, championships: 2, majorAwards: 2,
-    teamWins: 52, relationship: 90, seasonsSinceMove: 11
+    teamWins: 52, relationship: 90, seasonsSinceMove: 11, franchiseRank: 1
   });
   assert.ok(youngCore.chance <= 0.03);
   assert.ok(franchiseIcon.chance <= 0.02);
@@ -214,11 +214,45 @@ test('MVP score favors a 52-win core over a slightly better 38-win stat line', (
 });
 
 test('franchise icon retention survives late-career market decline', () => {
-  const icon = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 90, legacyScore: 210, championships: 2, tradeRequests: 0 });
+  const icon = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 90, legacyScore: 610, franchiseRank: 1, franchiseStatus: '队史第一人', championships: 2, tradeRequests: 0 });
   const estranged = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 25, legacyScore: 80, championships: 0, tradeRequests: 3 });
   assert.equal(icon.guaranteed, true);
   assert.ok(icon.probability >= 0.98);
   assert.ok(estranged.probability < 0.6);
+});
+
+test('long tenure alone cannot pass a real franchise legend', () => {
+  const standing = SIM.calculateFranchiseStanding({
+    score: 170,
+    seasons: 18,
+    consecutive: 18,
+    championships: 0,
+    majorAwards: 0,
+    legends: [
+      { name: '真实队史第一人', score: 600 },
+      { name: '真实队史第二人', score: 480 },
+      { name: '真实队史第三人', score: 420 },
+      { name: '真实队史第四人', score: 360 },
+      { name: '真实队史第五人', score: 300 }
+    ]
+  });
+  assert.equal(standing.status, '功勋球员');
+  assert.equal(standing.firstEligible, false);
+  assert.equal(standing.rankLabel, '暂未进入队史前 5');
+});
+
+test('a historic championship career can legitimately become franchise number one', () => {
+  const standing = SIM.calculateFranchiseStanding({
+    score: 705,
+    seasons: 15,
+    consecutive: 15,
+    championships: 3,
+    majorAwards: 4,
+    legends: [{ name: '迈克尔-乔丹', score: 700 }, { name: '斯科蒂-皮蓬', score: 560 }]
+  });
+  assert.equal(standing.rank, 1);
+  assert.equal(standing.status, '队史第一人');
+  assert.equal(standing.firstEligible, true);
 });
 
 function careerFixture(overrides = {}) {

@@ -1395,8 +1395,27 @@
       if (state.career.history[index].teamId !== teamId) break;
       consecutive += 1;
     }
-    const status = score >= 150 ? '队史第一人' : (score >= 85 ? '队史代表' : (consecutive >= 5 ? '功勋球员' : (consecutive >= 2 ? '长期成员' : '新加盟球员')));
-    return { seasons: seasons.length, consecutive, championships, majorAwards, score: Math.round(score), status };
+    const historyYear = (state.career?.startYear || DATA.getEra(state.eraKey).startYear) + Math.max(0, (state.career?.seasonNumber || 1) - 1);
+    const franchiseHistory = DATA.getTeamHistory(teamId, historyYear);
+    const standing = SIM.calculateFranchiseStanding({
+      score,
+      seasons: seasons.length,
+      consecutive,
+      championships,
+      majorAwards,
+      legends: franchiseHistory.legends
+    });
+    return {
+      seasons: seasons.length,
+      consecutive,
+      championships,
+      majorAwards,
+      score: Math.round(score),
+      historicalChampionships: franchiseHistory.championshipYears.length,
+      championshipYears: franchiseHistory.championshipYears,
+      legends: franchiseHistory.legends,
+      ...standing
+    };
   }
 
   function recentCareerMoves(window = 5) {
@@ -1436,6 +1455,7 @@
       teamsPlayed: state.career.teamsPlayed.length,
       recentMoves: recentCareerMoves(),
       franchiseScore: legacy.score,
+      franchiseRank: legacy.rank,
       championships: legacy.championships,
       majorAwards: legacy.majorAwards,
       teamWins: wins,
@@ -1506,7 +1526,17 @@
     const roster = league.players.filter(player => player.active && !player.isUser && player.teamId === teamId)
       .sort((left, right) => right.ovr - left.ovr).slice(0, 8)
       .map(player => ({ id: player.id, name: player.name, ovr: player.ovr, age: player.age, positions: leaguePlayerPositions(player) }));
-    return { rank, wins: record.wins, losses: record.losses, phase, roster };
+    const historyYear = (state.career?.startYear || DATA.getEra(state.eraKey).startYear) + Math.max(0, (state.career?.seasonNumber || 1) - 1);
+    const history = DATA.getTeamHistory(teamId, historyYear);
+    return {
+      rank,
+      wins: record.wins,
+      losses: record.losses,
+      phase,
+      roster,
+      championshipYears: history.championshipYears,
+      franchiseLegends: history.legends
+    };
   }
 
   function generateContractOffers(waitRound = false) {
@@ -1526,6 +1556,8 @@
       tenure: motherLegacy.consecutive,
       relationship: state.career.teamRelationships[motherTeamId] ?? 55,
       legacyScore: motherLegacy.score,
+      franchiseRank: motherLegacy.rank,
+      franchiseStatus: motherLegacy.status,
       championships: motherLegacy.championships,
       tradeRequests: (state.career.transactions || []).filter(event => event.type === '申请交易').length + (state.career.tradeRequestFailures || 0),
       forcedRetirement: state.career.forcedRetirement
@@ -1569,6 +1601,10 @@
         ...candidate.context,
         isCurrentTeam: candidate.team.id === state.career.currentTeam,
         retentionReasons: candidate.isMotherTeam ? motherRetention.reasons : [],
+        userFranchiseRank: candidate.isMotherTeam ? motherLegacy.rank : null,
+        userFranchiseRankLabel: candidate.isMotherTeam ? motherLegacy.rankLabel : null,
+        userFranchiseStatus: candidate.isMotherTeam ? motherLegacy.status : null,
+        userTeamChampionships: candidate.isMotherTeam ? motherLegacy.championships : 0,
         attitude: candidate.isMotherTeam
           ? (motherLegacy.status === '队史第一人' ? '队史核心挽留' : (age >= 34 ? '功勋老将短约' : '母队续约'))
           : '自由市场报价'
@@ -3697,9 +3733,18 @@
     const competition = offer.projection.competitors.length
       ? offer.projection.competitors.map(player => `${player.name} ${player.ovr}`).join('、')
       : '同位置暂无主要竞争者';
+    const championshipCopy = offer.championshipYears?.length
+      ? `现实队史 ${offer.championshipYears.length} 次 NBA 总冠军（${offer.championshipYears.join('、')}）`
+      : '现实队史尚无 NBA 总冠军';
+    const legendCopy = (offer.franchiseLegends || []).map(legend => `${legend.rank}.${legend.name}`).join(' · ');
     return `<article class="contract-offer${offer.isCurrentTeam ? ' is-current' : ''}">
       <header><img src="${team.logo}" alt=""><div><span>${offer.isCurrentTeam ? '母队续约报价' : offer.phase}</span><h3>${team.name}</h3><p>上赛季${team.conference === 'EAST' ? '东部' : '西部'}第 ${offer.rank} · ${offer.wins}-${offer.losses}</p></div><strong>${offer.years} 年<br><small>$${offer.annualSalary}M / 年</small></strong></header>
       <p class="offer-attitude"><b>${offer.attitude}</b>${offer.retentionReasons?.length ? ` · ${offer.retentionReasons.join('、')}` : ''}</p>
+      <div class="offer-franchise-history">
+        <p><b>球队历史</b>${championshipCopy}${offer.userTeamChampionships ? `；我为本队新增 ${offer.userTeamChampionships} 冠` : ''}</p>
+        <p><b>功勋前五</b>${legendCopy}</p>
+        ${offer.isCurrentTeam ? `<p class="my-franchise-rank"><b>我的位置</b>${offer.userFranchiseRankLabel} · ${offer.userFranchiseStatus}</p>` : ''}
+      </div>
       <div class="offer-role-grid"><div><span>预计角色</span><b>${offer.projection.role}</b></div><div><span>预计时间</span><b>${offer.projection.minutes} 分钟</b></div><div><span>预计球权</span><b>${offer.projection.usage}%</b></div><div><span>轮换顺位</span><b>第 ${offer.projection.rotationRank} 位</b></div></div>
       <p class="offer-competition"><b>位置竞争：</b>${competition}</p>
       <details><summary>查看主要球员名单</summary><div class="offer-roster">${offerRosterHTML(offer)}</div></details>

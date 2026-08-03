@@ -68,6 +68,7 @@
     secondary,
     logo: CURRENT_LOGO_OVERRIDES[id] || `https://a.espncdn.com/i/teamlogos/nba/500/${id.toLowerCase()}.png`
   }));
+  const TEAM_HISTORY = window.NBA_TEAM_HISTORY || {};
 
   const ARCHETYPES = {
     sniper:   { label: '空间狙击手', category: '投射', values: [96, 88, 72, 58, 84, 79, 69, 48, 42, 54, 79, 57, 91] },
@@ -463,6 +464,17 @@
     return activeTeams.find(team => team.id === id);
   }
 
+  function getTeamHistory(id, throughYear = Infinity) {
+    const aliases = { NJN: 'BKN', NOH: 'NOP', SEA: 'OKC' };
+    const canonicalId = aliases[id] || id;
+    const history = TEAM_HISTORY[canonicalId] || { teamId: canonicalId, championshipYears: [], legends: [] };
+    return {
+      ...history,
+      requestedTeamId: id,
+      championshipYears: history.championshipYears.filter(year => year <= throughYear)
+    };
+  }
+
   function getEra(key = activeEra.key) {
     if (key === 'current') return CURRENT_ERA;
     return withEraBranding(window.NBA_ERA_DATA?.eras?.[String(key)]) || CURRENT_ERA;
@@ -491,6 +503,7 @@
 
   window.GAME_DATA = {
     ATTRS,
+    TEAM_HISTORY,
     TEAMS,
     PLAYERS: activePlayers,
     ARCHETYPES,
@@ -504,6 +517,7 @@
     calculateAttributeOverall,
     seasonLabel,
     getTeam,
+    getTeamHistory,
     grade
   };
 }());

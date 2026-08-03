@@ -180,6 +180,7 @@
     const teamsPlayed = Math.max(1, Number(profile?.teamsPlayed) || 1);
     const recentMoves = Math.max(0, Number(profile?.recentMoves) || 0);
     const franchiseScore = Math.max(0, Number(profile?.franchiseScore) || 0);
+    const franchiseRank = Number.isFinite(Number(profile?.franchiseRank)) ? Number(profile.franchiseRank) : null;
     const championships = Math.max(0, Number(profile?.championships) || 0);
     const majorAwards = Math.max(0, Number(profile?.majorAwards) || 0);
     const teamWins = Number(profile?.teamWins) || 41;
@@ -200,10 +201,10 @@
       chance -= Math.min(0.11, (teamTenure - 4) * 0.018);
       protections.push(teamTenure >= 9 ? '长期功勋球员' : '长期效力本队');
     }
-    if (franchiseScore >= 150) {
+    if (franchiseRank === 1) {
       chance -= 0.13;
       protections.push('队史第一人级贡献');
-    } else if (franchiseScore >= 85) {
+    } else if ((franchiseRank && franchiseRank <= 5) || franchiseScore >= 85) {
       chance -= 0.07;
       protections.push('队史代表球员');
     }
@@ -377,10 +378,48 @@
     };
   }
 
+  function calculateFranchiseStanding(profile = {}) {
+    const score = Math.max(0, Number(profile.score) || 0);
+    const seasons = Math.max(0, Number(profile.seasons) || 0);
+    const consecutive = Math.max(0, Number(profile.consecutive) || 0);
+    const championships = Math.max(0, Number(profile.championships) || 0);
+    const majorAwards = Math.max(0, Number(profile.majorAwards) || 0);
+    const legends = (Array.isArray(profile.legends) ? profile.legends : [])
+      .map((legend, index) => ({ rank: index + 1, name: legend.name, score: Math.max(0, Number(legend.score) || 0) }))
+      .sort((left, right) => right.score - left.score);
+    const rawRank = legends.filter(legend => legend.score > score).length + 1;
+    const leader = legends[0] || null;
+    const firstEligible = rawRank === 1 && seasons >= 8 && (championships >= 1 || majorAwards >= 2);
+    let status = '新加盟球员';
+    if (firstEligible) status = '队史第一人';
+    else if (rawRank <= 3 && score >= (legends[Math.min(2, legends.length - 1)]?.score || 0)) status = '队史前三';
+    else if (rawRank <= 5 && score >= (legends[Math.min(4, legends.length - 1)]?.score || 0)) status = '队史前五';
+    else if (score >= (legends[legends.length - 1]?.score || 180) * 0.75) status = '队史代表';
+    else if (consecutive >= 8) status = '功勋球员';
+    else if (consecutive >= 5) status = '长期成员';
+    else if (consecutive >= 2) status = '轮换骨干';
+    const displayedRank = firstEligible ? 1 : Math.max(rawRank, rawRank === 1 ? 2 : rawRank);
+    const ranked = displayedRank <= legends.length;
+    const nextLegend = firstEligible ? null : legends[Math.max(0, displayedRank - 2)] || leader;
+    return {
+      rank: displayedRank,
+      rawRank,
+      ranked,
+      status,
+      firstEligible,
+      leader,
+      nextLegend,
+      rankLabel: ranked ? `队史功勋榜第 ${displayedRank}` : `暂未进入队史前 ${legends.length}`,
+      scoreToNext: nextLegend ? Math.max(0, Math.ceil(nextLegend.score - score + 1)) : 0
+    };
+  }
+
   function calculateMotherTeamRetention(profile = {}) {
     const tenure = Math.max(0, Number(profile.tenure) || 0);
     const relationship = clamp(Number(profile.relationship) || 50, 0, 100);
     const legacyScore = Math.max(0, Number(profile.legacyScore) || 0);
+    const franchiseRank = Number.isFinite(Number(profile.franchiseRank)) ? Number(profile.franchiseRank) : null;
+    const franchiseStatus = String(profile.franchiseStatus || '');
     const championships = Math.max(0, Number(profile.championships) || 0);
     const tradeRequests = Math.max(0, Number(profile.tradeRequests) || 0);
     const forcedRetirement = Boolean(profile.forcedRetirement);
@@ -388,14 +427,15 @@
     let probability = 0.18 + relationship * 0.004 + Math.min(0.28, tenure * 0.025) + Math.min(0.22, legacyScore * 0.0012) + Math.min(0.12, championships * 0.04);
     if (tenure >= 8) reasons.push('长期效力本队');
     if (tenure >= 12) reasons.push('一人一城功勋');
-    if (legacyScore >= 85) reasons.push('队史代表球员');
-    if (legacyScore >= 150) reasons.push('队史第一人级贡献');
+    if ((franchiseRank && franchiseRank <= 5) || franchiseStatus === '队史代表') reasons.push('队史代表球员');
+    if (franchiseRank === 1 && franchiseStatus === '队史第一人') reasons.push('队史第一人级贡献');
     if (championships) reasons.push('冠军功勋');
     probability -= Math.min(0.42, tradeRequests * 0.14);
     if (relationship < 35) probability -= (35 - relationship) * 0.012;
     if (forcedRetirement) probability = 0;
-    const guaranteed = !forcedRetirement && relationship >= 70 && (tenure >= 12 || legacyScore >= 150);
-    if (guaranteed) probability = Math.max(probability, legacyScore >= 150 ? 0.98 : 0.92);
+    const franchiseLeader = franchiseRank === 1 && franchiseStatus === '队史第一人';
+    const guaranteed = !forcedRetirement && relationship >= 70 && (tenure >= 12 || franchiseLeader);
+    if (guaranteed) probability = Math.max(probability, franchiseLeader ? 0.98 : 0.92);
     return { probability: Math.round(clamp(probability, 0, 0.99) * 1000) / 1000, guaranteed, reasons };
   }
 
@@ -571,6 +611,7 @@
     calculateStatProfile,
     historicalAttributeCeiling,
     calculateMvpScore,
+    calculateFranchiseStanding,
     calculateMotherTeamRetention,
     calculateCareerLegacy,
     calculateCareerTitles,

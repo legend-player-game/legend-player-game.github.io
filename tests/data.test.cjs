@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 global.window = global;
 require('../roster-data.js');
 require('../era-data.js');
+require('../team-history.js');
 require('../data.js');
 
 test('current Celtics age metadata preserves the real age gap', () => {
@@ -110,4 +111,23 @@ test('current-era 99 ratings are rare and limited to audited signature skills', 
     '扬尼斯-阿德托昆博:FIN',
     '维克托·文班亚马:BLK'
   ].sort());
+});
+
+test('all 30 teams include championship history and a five-player franchise ranking', () => {
+  const { TEAMS, TEAM_HISTORY, getTeamHistory } = global.GAME_DATA;
+  assert.equal(Object.keys(TEAM_HISTORY).length, 30);
+  TEAMS.forEach(team => {
+    const history = getTeamHistory(team.id);
+    assert.equal(history.legends.length, 5, `${team.id} should have five franchise legends`);
+    assert.deepEqual(history.legends.map(legend => legend.rank), [1, 2, 3, 4, 5]);
+    assert.ok(history.legends.every(legend => legend.name && legend.score >= 200));
+  });
+  assert.equal(getTeamHistory('BOS').championshipYears.length, 18);
+  assert.equal(getTeamHistory('LAL').championshipYears.length, 17);
+  assert.deepEqual(getTeamHistory('CHI').championshipYears, [1991, 1992, 1993, 1996, 1997, 1998]);
+  assert.equal(getTeamHistory('SAS').legends[0].name, '蒂姆-邓肯');
+  assert.equal(getTeamHistory('NJN').legends[0].name, '杰森-基德');
+  assert.equal(getTeamHistory('NOH').legends[0].name, '克里斯-保罗');
+  assert.equal(getTeamHistory('SEA', 2003).championshipYears.length, 1);
+  assert.deepEqual(getTeamHistory('OKC', 2024).championshipYears, [1979]);
 });
