@@ -110,6 +110,7 @@
       .map(player => ({
         rating: Number(player?.effectiveOvr ?? player?.ovr) || 0,
         minutes: Math.max(0, Number(player?.minutes) || 0),
+        usage: Math.max(0, Number(player?.usage) || 0),
         attrs: player?.attrs || null
       }))
       .filter(player => player.rating > 0)
@@ -131,8 +132,68 @@
     const spacing = (attributeAverage('threePT') + attributeAverage('MID')) / 2;
     const defense = (attributeAverage('PDEF') + attributeAverage('IDEF') + attributeAverage('BLK')) / 3;
     const fitBonus = Math.max(0, creation - 82) * 0.025 + Math.max(0, spacing - 82) * 0.018 + Math.max(0, defense - 82) * 0.022;
+    const playmakingImpact = calculatePlaymakingImpact(rotation);
     const weakRotationPenalty = rotation.length < 7 ? (7 - rotation.length) * 0.8 : 0;
-    return Math.round((rotationStrength + starBonus + fitBonus - weakRotationPenalty) * 10) / 10;
+    return Math.round((rotationStrength + starBonus + fitBonus + playmakingImpact - weakRotationPenalty) * 10) / 10;
+  }
+
+  function calculateOffensiveUsage(profile = {}) {
+    const ovr = clamp(Number(profile.ovr) || 60, 40, 99);
+    const teamCoreOvr = clamp(Number(profile.teamCoreOvr) || 75, 40, 99);
+    const scoring = clamp(Number(profile.scoring) || ovr, 40, 99);
+    const playmaking = clamp(Number(profile.playmaking) || ovr, 40, 99);
+    const minutes = clamp(Number(profile.minutes) || 0, 0, 48);
+    const rank = Math.max(1, Number(profile.rank) || 15);
+    const archetypeBonus = Number(profile.archetypeBonus) || 0;
+    const roleOpportunity = clamp((minutes - 14) / 20, 0, 1);
+    const relativeValue = (ovr - teamCoreOvr) * 0.42;
+    const scoringValue = Math.max(0, scoring - 78) * 0.11;
+    const creationValue = Math.max(0, playmaking - 75) * 0.18 + eliteTail(playmaking, 90) * 8.8;
+    const hierarchyValue = Math.max(0, 3 - rank) * 0.8;
+    const raw = 17.5 + relativeValue + scoringValue + creationValue * roleOpportunity + hierarchyValue + archetypeBonus;
+    const ceiling = clamp(37 + Math.max(0, playmaking - 92) * 0.72 + Math.max(0, scoring - 95) * 0.2, 37, 44);
+    return {
+      usage: Math.round(clamp(raw, 8, ceiling) * 10) / 10,
+      ceiling: Math.round(ceiling * 10) / 10,
+      playmaking: Math.round(playmaking * 10) / 10,
+      creationBonus: Math.round(creationValue * roleOpportunity * 10) / 10
+    };
+  }
+
+  function calculatePlaymakingImpact(players) {
+    const creators = (Array.isArray(players) ? players : []).map(player => {
+      const passing = Number(player?.attrs?.PAS);
+      const handling = Number(player?.attrs?.HAN);
+      if (!Number.isFinite(passing) || !Number.isFinite(handling)) return null;
+      const creation = passing * 0.72 + handling * 0.28;
+      const minutesFactor = clamp((Number(player?.minutes) || 0) / 34, 0, 1.15);
+      const usageFactor = clamp((Number(player?.usage) || 24) / 32, 0.55, 1.35);
+      return { creation, impact: Math.max(0, creation - 88) * 0.13 * minutesFactor * usageFactor };
+    }).filter(Boolean).sort((left, right) => right.impact - left.impact);
+    if (!creators.length) return 0;
+    const lead = creators[0].impact;
+    const secondary = Math.min(0.45, (creators[1]?.impact || 0) * 0.25);
+    return Math.round(clamp(lead + secondary, 0, 2.4) * 100) / 100;
+  }
+
+  function selectAwardFinalists(players, options = {}) {
+    const limit = Math.max(1, Number(options.limit) || 3);
+    const maxPerTeam = Math.max(1, Number(options.maxPerTeam) || limit);
+    const selected = [];
+    const teamCounts = new Map();
+    (Array.isArray(players) ? players : [])
+      .slice()
+      .sort((left, right) => (Number(right.awardScore) || 0) - (Number(left.awardScore) || 0))
+      .some(player => {
+        const teamKey = player.teamId || `player:${player.name}`;
+        const count = teamCounts.get(teamKey) || 0;
+        if (count < maxPerTeam) {
+          selected.push(player);
+          teamCounts.set(teamKey, count + 1);
+        }
+        return selected.length >= limit;
+      });
+    return selected;
   }
 
   function bestOfSevenWinProbability(gameWinProbability) {
@@ -358,15 +419,17 @@
     const ast = Number(player?.ast) || 0;
     const tov = Number(player?.tov) || 0;
     const trueShooting = Number(player?.trueShooting ?? player?.ts) || 57;
+    const usage = Number(player?.usage) || 25;
     const production = pts * 0.72 + reb * 0.22 + ast * 0.34 - tov * 0.2;
     const efficiency = clamp((trueShooting - 52) * 0.28, -2, 4);
     const teamSuccess = wins >= 55 ? 12 + (wins - 55) * 0.32
       : (wins >= 50 ? 8 + (wins - 50) * 0.8
         : (wins >= 42 ? (wins - 42) * 0.5 : -(42 - wins) * 0.75));
     const ratingStability = Math.max(0, (Number(player?.ovr) || 75) - 80) * 0.12;
+    const offensiveLoad = clamp((usage - 25) * 0.22, -1.5, 4);
     const availabilityScore = (availability - 0.79) * 8;
     const belowFiveHundredPenalty = wins < 41 && pts < 34 ? 7 + (41 - wins) * 0.4 : 0;
-    const total = production + efficiency + teamSuccess + ratingStability + availabilityScore - belowFiveHundredPenalty;
+    const total = production + efficiency + teamSuccess + ratingStability + offensiveLoad + availabilityScore - belowFiveHundredPenalty;
     return {
       total: Math.round(total * 100) / 100,
       production: Math.round(production * 100) / 100,
@@ -374,6 +437,7 @@
       teamSuccess: Math.round(teamSuccess * 100) / 100,
       availability: Math.round(availabilityScore * 100) / 100,
       ratingStability: Math.round(ratingStability * 100) / 100,
+      offensiveLoad: Math.round(offensiveLoad * 100) / 100,
       belowFiveHundredPenalty
     };
   }
@@ -440,9 +504,8 @@
     const rawRank = legends.filter(legend => legend.score > score).length + 1;
     let championshipRankCap = Infinity;
     if (historicalChampionships === 0) {
-      if (coreChampionships >= 3) championshipRankCap = 2;
-      else if (coreChampionships >= 2) championshipRankCap = 3;
-      else if (coreChampionships >= 1) championshipRankCap = 5;
+      if (coreChampionships >= 2) championshipRankCap = 2;
+      else if (coreChampionships >= 1) championshipRankCap = 3;
     } else if (historicalChampionships === 1) {
       if (coreChampionships >= 3) championshipRankCap = 3;
       else if (coreChampionships >= 2) championshipRankCap = 5;
@@ -673,6 +736,9 @@
     conferenceSeeds,
     seriesWinProbability,
     calculatePlayoffTeamStrength,
+    calculateOffensiveUsage,
+    calculatePlaymakingImpact,
+    selectAwardFinalists,
     bestOfSevenWinProbability,
     tradeValue,
     calculateTradeProbability,

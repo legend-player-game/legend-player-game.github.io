@@ -984,11 +984,18 @@
         .filter(player => player.active && player.teamId === teamId && playerAvailableForGame(player, currentGame));
       const allocation = SIM.allocateRotation(activeRoster);
       const weightedRoster = activeRoster
-        .map(player => ({ player, effectiveOVR: leaguePlayerGameOVR(player, currentGame), minutes: allocation[player.id] || 0 }))
+        .map(player => ({
+          player,
+          effectiveOVR: leaguePlayerGameOVR(player, currentGame),
+          minutes: allocation[player.id] || 0,
+          usage: player.seasonRole?.usage || 0,
+          attrs: ensureLeaguePlayerAttributes(player)
+        }))
         .filter(item => item.minutes > 0);
       const totalMinutes = weightedRoster.reduce((sum, item) => sum + item.minutes, 0);
       if (weightedRoster.length >= 5 && totalMinutes > 0) {
-        return weightedRoster.reduce((sum, item) => sum + item.effectiveOVR * item.minutes, 0) / totalMinutes;
+        const rotationStrength = weightedRoster.reduce((sum, item) => sum + item.effectiveOVR * item.minutes, 0) / totalMinutes;
+        return rotationStrength + SIM.calculatePlaymakingImpact(weightedRoster);
       }
     }
     const roster = DATA.PLAYERS[teamId] || [];
@@ -1004,6 +1011,7 @@
     const rotation = roster.map(player => ({
       effectiveOvr: leaguePlayerGameOVR(player, currentGame),
       minutes: allocation[player.id] || 0,
+      usage: player.seasonRole?.usage || 0,
       attrs: ensureLeaguePlayerAttributes(player)
     }));
     return SIM.calculatePlayoffTeamStrength(rotation);
@@ -1623,11 +1631,19 @@
   function leagueRoleProfile(player, roster, rank, minutes) {
     const creatorAverage = roster.slice(0, 3).reduce((sum, teammate) => sum + teammate.ovr, 0) / Math.max(1, Math.min(3, roster.length));
     const archetypeUsage = { creator: 3.5, slasher: 2.8, sniper: 1.8, wing: 1.2, pointbig: 1.4, big: 0.3, twoway: -0.5, anchor: -1.8 }[player.archetype] || 0;
-    const userOffense = player.isUser
-      ? (state.attrs.threePT + state.attrs.MID + state.attrs.FIN + state.attrs.DNK + state.attrs.HAN + state.attrs.PAS) / 6
-      : player.ovr;
-    const usage = Math.round(clamp(19 + (player.ovr - creatorAverage) * 0.4 + archetypeUsage + (userOffense - player.ovr) * 0.12, 9, 38) * 10) / 10;
-    return { minutes, usage, rotationRank: rank + 1 };
+    const attrs = ensureLeaguePlayerAttributes(player);
+    const scoring = attrs.threePT * 0.22 + attrs.MID * 0.18 + attrs.FIN * 0.23 + attrs.DNK * 0.12 + attrs.HAN * 0.17 + attrs.ATH * 0.08;
+    const playmaking = attrs.PAS * 0.72 + attrs.HAN * 0.28;
+    const usageResult = SIM.calculateOffensiveUsage({
+      ovr: player.ovr,
+      teamCoreOvr: creatorAverage,
+      scoring,
+      playmaking,
+      minutes,
+      rank: rank + 1,
+      archetypeBonus: archetypeUsage
+    });
+    return { minutes, usage: usageResult.usage, usageCeiling: usageResult.ceiling, rotationRank: rank + 1 };
   }
 
   function assignLeagueRotations(league, userPenalty = 0) {
@@ -2331,14 +2347,18 @@
     if (!profiles.length) return [];
     const history = state.career.league.awardHistory || [];
     const recentWinners = history.slice(-2).map(entry => entry[awardKey]);
-    return profiles.map(player => {
+    const scored = profiles.map(player => {
       let repeatPenalty = 0;
       if (recentWinners[recentWinners.length - 1] === player.name) repeatPenalty += 0.45;
       if (recentWinners[0] === player.name) repeatPenalty += 0.2;
       const scoreResult = score(player);
       const scoreValue = typeof scoreResult === 'object' ? scoreResult.total : scoreResult;
       return { ...player, awardBreakdown: typeof scoreResult === 'object' ? scoreResult : null, awardScore: scoreValue - repeatPenalty + randomNormal() * 0.55 };
-    }).sort((left, right) => right.awardScore - left.awardScore).slice(0, 3);
+    });
+    return SIM.selectAwardFinalists(scored, {
+      limit: 3,
+      maxPerTeam: awardKey === 'mvp' ? 1 : 3
+    });
   }
 
   function awardCandidate(player, type) {
@@ -2377,7 +2397,8 @@
       stl: Number(averages.stl), blk: Number(averages.blk), stocks: Number(averages.stl) + Number(averages.blk),
       tov: Number(averages.tov),
       trueShooting: Number(averages.pts) / Math.max(1, 2 * (Number(averages.fga) + Number(averages.fta) * 0.44)) * 100,
-      wins: state.season.wins, games: state.season.playerGames || 0, availability: userAvailability
+      wins: state.season.wins, games: state.season.playerGames || 0, availability: userAvailability,
+      usage: state.season.roleProfile?.usage || 25
     };
     const mvpRank = rankLeagueAward(userAwardEligible ? [...mvpPool, userProfile] : mvpPool, 'mvp', SIM.calculateMvpScore);
     const dpoyRank = rankLeagueAward(userAwardEligible ? [...mvpPool, userProfile] : mvpPool, 'dpoy', player => player.defense * 0.9 + player.stocks * 4.5 + player.reb * 0.35 + player.wins * 0.1);
@@ -2402,7 +2423,7 @@
       else if (allNbaRank <= 15) allNba = '最佳阵容三阵';
     }
     const awards = [
-      { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), reason: '综合个人产量、球队胜场、核心球权和赛季出勤率评定。' },
+      { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), reason: '综合个人产量、球队胜场、进攻主导权和赛季出勤率评定；同队球星会分流选票，前三候选每队最多一人。' },
       { label: '最佳防守球员', short: 'DPOY', winner: dpoy.name, detail: awardCandidate(dpoy, 'dpoy').detail, isUser: userDPOY, candidates: dpoyRank.map(player => awardCandidate(player, 'dpoy')), reason: '重点比较防守属性、抢断盖帽、篮板保护和球队胜场。' },
       { label: '年度最佳新秀', short: 'ROTY', winner: rookie.name, detail: awardCandidate(rookie, 'rookie').detail, isUser: userROTY, candidates: rookieRank.map(player => awardCandidate(player, 'rookie')), reason: '仅比较本届新秀的即时能力、数据产量和承担角色。' },
       { label: '常规赛得分王', short: 'SC', winner: scoring.name, detail: awardCandidate(scoring, 'scoring').detail, isUser: userScoring, candidates: scoringRank.map(player => awardCandidate(player, 'scoring')), reason: '以符合出勤门槛后的场均得分为首要依据。' },

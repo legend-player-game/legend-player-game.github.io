@@ -213,6 +213,32 @@ test('MVP score favors a 52-win core over a slightly better 38-win stat line', (
   assert.ok(winner.total > loser.total + 3);
 });
 
+test('MVP finalists do not contain multiple stars from the same team', () => {
+  const finalists = SIM.selectAwardFinalists([
+    { name: 'A队核心一', teamId: 'A', awardScore: 92 },
+    { name: 'A队核心二', teamId: 'A', awardScore: 90 },
+    { name: 'B队核心', teamId: 'B', awardScore: 88 },
+    { name: 'C队核心', teamId: 'C', awardScore: 86 }
+  ], { limit: 3, maxPerTeam: 1 });
+  assert.deepEqual(finalists.map(player => player.name), ['A队核心一', 'B队核心', 'C队核心']);
+});
+
+test('generational playmaking unlocks higher offensive involvement and team impact', () => {
+  const elite = SIM.calculateOffensiveUsage({
+    ovr: 97, teamCoreOvr: 90, scoring: 92, playmaking: 99, minutes: 36, rank: 1, archetypeBonus: 3.5
+  });
+  const ordinary = SIM.calculateOffensiveUsage({
+    ovr: 97, teamCoreOvr: 90, scoring: 92, playmaking: 86, minutes: 36, rank: 1, archetypeBonus: 3.5
+  });
+  assert.ok(elite.usage >= 39, `unexpected elite usage: ${elite.usage}`);
+  assert.ok(elite.usage > ordinary.usage + 5);
+  assert.ok(elite.ceiling > 40);
+  const impact = SIM.calculatePlaymakingImpact([
+    { minutes: 36, usage: elite.usage, attrs: { PAS: 99, HAN: 99 } }
+  ]);
+  assert.ok(impact >= 1.4);
+});
+
 test('franchise icon retention survives late-career market decline', () => {
   const icon = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 90, legacyScore: 610, franchiseRank: 1, franchiseStatus: '队史第一人', championships: 2, tradeRequests: 0 });
   const estranged = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 25, legacyScore: 80, championships: 0, tradeRequests: 3 });
@@ -255,7 +281,7 @@ test('a historic championship career can legitimately become franchise number on
   assert.equal(standing.firstEligible, true);
 });
 
-test('two core titles guarantee a top-three place for a previously titleless franchise', () => {
+test('two core titles guarantee a top-two place for a previously titleless franchise', () => {
   const standing = SIM.calculateFranchiseStanding({
     score: 210,
     seasons: 7,
@@ -267,12 +293,12 @@ test('two core titles guarantee a top-three place for a previously titleless fra
     legends: [620, 510, 430, 350, 280].map((score, index) => ({ name: `功勋${index + 1}`, score }))
   });
   assert.equal(standing.rawRank, 6);
-  assert.equal(standing.rank, 3);
+  assert.equal(standing.rank, 2);
   assert.equal(standing.status, '队史前三');
   assert.equal(standing.championshipGuaranteeApplied, true);
 });
 
-test('one core title guarantees top five for a previously titleless franchise', () => {
+test('one core title guarantees top three for a previously titleless franchise', () => {
   const standing = SIM.calculateFranchiseStanding({
     score: 180,
     seasons: 5,
@@ -281,8 +307,8 @@ test('one core title guarantees top five for a previously titleless franchise', 
     coreChampionships: 1,
     legends: [620, 510, 430, 350, 280].map((score, index) => ({ name: `功勋${index + 1}`, score }))
   });
-  assert.equal(standing.rank, 5);
-  assert.equal(standing.status, '队史前五');
+  assert.equal(standing.rank, 3);
+  assert.equal(standing.status, '队史前三');
 });
 
 test('bench titles add legacy points but do not trigger core-title rank protection', () => {
