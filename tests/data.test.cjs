@@ -131,3 +131,9 @@ test('all 30 teams include championship history and a five-player franchise rank
   assert.equal(getTeamHistory('SEA', 2003).championshipYears.length, 1);
   assert.deepEqual(getTeamHistory('OKC', 2024).championshipYears, [1979]);
 });
+
+test('attribute impact guide covers every build attribute', () => {
+  const { ATTRS, ATTRIBUTE_IMPACTS } = global.GAME_DATA;
+  assert.deepEqual(Object.keys(ATTRIBUTE_IMPACTS).sort(), ATTRS.map(([key]) => key).sort());
+  ATTRS.forEach(([key]) => assert.ok(ATTRIBUTE_IMPACTS[key].length >= 2, `${key} needs concrete effects`));
+});

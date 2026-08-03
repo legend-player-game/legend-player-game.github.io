@@ -962,6 +962,8 @@
       isSimulating: !deferSimulation,
       playInSimulation: null,
       seriesSimulation: null,
+      postseasonPlayerStats: {},
+      finalsMvp: null,
       tradeRequested: false,
       tradeResult: null,
       ended: false,
@@ -2615,6 +2617,84 @@
       .find(matchup => matchup.teams.includes(state.careerTeam))?.teams.find(teamId => teamId !== state.careerTeam);
   }
 
+  function addPostseasonLine(player, line, isFinals) {
+    const store = state.season.postseasonPlayerStats || (state.season.postseasonPlayerStats = {});
+    const entry = store[player.id] || {
+      id: player.id, name: player.isUser ? '我' : player.name, teamId: player.teamId,
+      pos: player.pos, isUser: Boolean(player.isUser), games: 0, totals: freshPlayerTotals(), finalsGames: 0, finalsTotals: freshPlayerTotals()
+    };
+    entry.games += 1;
+    Object.keys(entry.totals).forEach(key => { entry.totals[key] += Number(line[key]) || 0; });
+    if (isFinals) {
+      entry.finalsGames += 1;
+      Object.keys(entry.finalsTotals).forEach(key => { entry.finalsTotals[key] += Number(line[key]) || 0; });
+    }
+    store[player.id] = entry;
+  }
+
+  function simulatePostseasonTeamBoxScore(teamId, teamScore, won, isFinals) {
+    const league = ensureLeagueState();
+    if (teamId === state.careerTeam) syncUserLeaguePlayer();
+    const roster = league.players.filter(player => player.active && player.teamId === teamId);
+    const allocation = SIM.allocateRotation(roster);
+    const rotation = roster.filter(player => (allocation[player.id] || 0) > 0);
+    const lines = rotation.map(player => {
+      const attrs = ensureLeaguePlayerAttributes(player);
+      const minutes = allocation[player.id] || 0;
+      const usage = player.seasonRole?.usage || clamp(14 + (player.ovr - 72) * 0.65, 12, 34);
+      const profile = SIM.calculateStatProfile({ attrs, position: player.pos, minutes, usage, ovr: player.ovr, role: player.archetype, pace: eraPace() });
+      const fga = Math.max(1, Math.round(profile.fga + randomNormal() * 1.5));
+      const threeRate = clamp(({ PG: 0.42, SG: 0.4, SF: 0.34, PF: 0.25, C: 0.14 }[player.pos] || 0.3) + (attrs.threePT - 75) * 0.007, 0.05, 0.62);
+      const tpa = clamp(Math.round(fga * threeRate), 0, fga);
+      const tpm = clamp(Math.round(tpa * clamp(0.24 + attrs.threePT / 500, 0.27, 0.46) + randomNormal() * 0.7), 0, tpa);
+      const twoPa = fga - tpa;
+      const twoPm = clamp(Math.round(twoPa * clamp(0.38 + (attrs.FIN * 0.5 + attrs.MID * 0.3 + attrs.DNK * 0.2) / 100 * 0.22, 0.42, 0.67) + randomNormal() * 0.8), 0, twoPa);
+      const fta = Math.max(0, Math.round((attrs.FIN + attrs.ATH + usage) / 38 + randomNormal()));
+      const ftm = clamp(Math.round(fta * clamp(0.54 + (attrs.MID + attrs.CLU) / 200 * 0.3, 0.58, 0.92)), 0, fta);
+      return {
+        player,
+        line: {
+          pts: twoPm * 2 + tpm * 3 + ftm,
+          reb: Math.max(0, Math.round(profile.reb + randomNormal() * 1.5)),
+          ast: Math.max(0, Math.round(profile.ast + randomNormal() * 1.4)),
+          stl: Math.max(0, Math.round((profile.stl + randomNormal() * 0.35) * 10) / 10),
+          blk: Math.max(0, Math.round((profile.blk + randomNormal() * 0.3) * 10) / 10),
+          tov: Math.max(0, Math.round((profile.tov + randomNormal() * 0.5) * 10) / 10),
+          fgm: twoPm + tpm, fga, tpm, tpa, ftm, fta, min: minutes
+        }
+      };
+    });
+    const rawPoints = Math.max(1, lines.reduce((sum, item) => sum + item.line.pts, 0));
+    const scoringScale = teamScore / rawPoints;
+    lines.forEach(item => {
+      item.line.pts = Math.max(0, Math.round(item.line.pts * scoringScale));
+      addPostseasonLine(item.player, item.line, isFinals);
+    });
+  }
+
+  function selectFinalsMvp(championTeamId) {
+    const candidates = Object.values(state.season.postseasonPlayerStats || {})
+      .filter(player => player.teamId === championTeamId && player.finalsGames > 0)
+      .map(player => {
+        const averages = averagesFromTotals(player.finalsTotals, player.finalsGames);
+        return { ...player, ...averages, score: SIM.calculateFinalsMvpScore({ ...averages, games: player.finalsGames }) };
+      })
+      .sort((left, right) => right.score - left.score);
+    const winner = candidates[0];
+    if (!winner) return null;
+    state.season.finalsMvp = {
+      id: winner.id, name: winner.name, teamId: winner.teamId, isUser: winner.isUser,
+      score: winner.score, stats: { pts: winner.pts, reb: winner.reb, ast: winner.ast, stl: winner.stl, blk: winner.blk, fgPct: winner.fgPct }
+    };
+    if (winner.isUser && !state.season.awards.some(award => award.recordLabel === '总决赛最有价值球员')) {
+      state.season.awards.push({ label: '总决赛最有价值球员', recordLabel: '总决赛最有价值球员', short: 'FMVP', winner: '我', detail: `${winner.pts} 分 · ${winner.reb} 篮板 · ${winner.ast} 助攻`, isUser: true });
+    }
+    const league = ensureLeagueState();
+    const existing = (league.awardHistory || []).find(entry => entry.seasonNumber === state.career.seasonNumber) || { seasonNumber: state.career.seasonNumber };
+    league.awardHistory = STATE.upsertSeasonRecord(league.awardHistory, { ...existing, finalsMvp: winner.name, champion: championTeamId });
+    return state.season.finalsMvp;
+  }
+
   function simulateSeries() {
     if (state.season.stage !== 'playoffs' || state.season.ended || state.season.seriesSimulation) return;
     const labels = ['首轮', '分区半决赛', '分区决赛', '总决赛'];
@@ -2637,7 +2717,10 @@
       if (wonGame) sim.wins += 1; else sim.losses += 1;
       const myScore = Math.round(101 + random() * 22 + (wonGame ? 5 : 0));
       const theirScore = Math.round(101 + random() * 22 + (wonGame ? 0 : 5));
-      sim.games.push({ won: wonGame, myScore: wonGame ? Math.max(myScore, theirScore + 1) : Math.min(myScore, theirScore - 1), theirScore });
+      const finalMyScore = wonGame ? Math.max(myScore, theirScore + 1) : Math.min(myScore, theirScore - 1);
+      simulatePostseasonTeamBoxScore(state.careerTeam, finalMyScore, wonGame, round === 3);
+      simulatePostseasonTeamBoxScore(opponent, theirScore, !wonGame, round === 3);
+      sim.games.push({ won: wonGame, myScore: finalMyScore, theirScore });
       renderSeason();
       if (sim.wins >= 4 || sim.losses >= 4) {
         stopSimulationTimer(timer);
@@ -2662,6 +2745,7 @@
       if (round === 2) bracket.conferences[ownConference].champion = matchup.winner;
     }
     state.season.series.push({ label: sim.label, opponent: sim.opponent, won, score: `${sim.wins}-${sim.losses}`, games: sim.games });
+    if (round === 3) selectFinalsMvp(won ? state.careerTeam : sim.opponent);
     state.season.seriesSimulation = null;
     if (!won) {
       transitionSeasonStage('ended');
@@ -2749,7 +2833,11 @@
       injuries: (state.season.injuries || []).map(injury => injury.label),
       awards: earnedAwards,
       champion: state.season.champion,
-      postseason: seasonResultLabel()
+      postseason: seasonResultLabel(),
+      finalsMvp: state.season.finalsMvp ? { ...state.season.finalsMvp } : null,
+      postseasonStats: state.season.postseasonPlayerStats?.['user-player']
+        ? averagesFromTotals(state.season.postseasonPlayerStats['user-player'].totals, state.season.postseasonPlayerStats['user-player'].games)
+        : null
     };
     state.career.history.push(entry);
     state.career.totalGames += games;
@@ -3235,6 +3323,8 @@
         <div><span>合同</span><b>${state.career.contract.yearsRemaining} 年 · $${state.career.contract.annualSalary}M</b></div>
         <div><span>生涯进度</span><b>${state.career.history.length} / ${CAREER_SEASONS} 季已完成</b></div>
         <button class="secondary-btn" type="button" data-action="career-history">查看生涯数据</button>
+        <button class="secondary-btn" type="button" data-action="team-center">球队名单与数据</button>
+        <button class="secondary-btn" type="button" data-action="attribute-impact">能力影响说明</button>
       </div>
       ${season.offseasonNote ? `<div class="career-event-strip"><b>休赛期动态</b><span>${season.offseasonNote}</span></div>` : ''}
       <div class="season-context-grid" aria-label="球队角色与健康负荷">
@@ -3361,6 +3451,81 @@
         <nav class="career-archive-tabs" aria-label="生涯档案分类">${CAREER_ARCHIVE_TABS.map(([key, label]) => `<button class="${key === activeTab ? 'is-active' : ''}" type="button" data-action="career-history-tab" data-career-tab="${key}">${label}</button>`).join('')}</nav>
         <div class="modal-body career-archive-content">${careerArchiveContentHTML(activeTab)}</div>
       </section>`;
+  }
+
+  const TEAM_CENTER_TABS = [['roster', '球队名单'], ['regular', '常规赛数据'], ['postseason', '季后赛数据']];
+
+  function currentTeamRoster() {
+    const league = ensureLeagueState();
+    syncUserLeaguePlayer();
+    return league.players
+      .filter(player => player.active && player.teamId === state.careerTeam)
+      .sort((left, right) => ((right.isUser ? state.season.roleProfile?.minutes : right.seasonRole?.minutes) || 0) - ((left.isUser ? state.season.roleProfile?.minutes : left.seasonRole?.minutes) || 0) || right.ovr - left.ovr)
+      .slice(0, 15);
+  }
+
+  function teamRosterTableHTML() {
+    return `<div class="career-table-wrap"><table class="career-table team-data-table"><thead><tr><th>球员</th><th>位置</th><th>年龄</th><th>OVR</th><th>轮换</th><th>分钟</th><th>球权</th><th>健康</th></tr></thead><tbody>${currentTeamRoster().map(player => { const role = player.isUser ? state.season.roleProfile : player.seasonRole; return `<tr class="${player.isUser ? 'is-user-row' : ''}"><td>${player.isUser ? '我' : player.name}</td><td>${(player.positions || [player.pos]).join('/')}</td><td>${player.age}</td><td>${player.ovr}</td><td>第 ${role?.rotationRank || '--'} 位</td><td>${role?.minutes ?? '--'}</td><td>${role?.usage ?? '--'}${role ? '%' : ''}</td><td>${player.seasonInjury?.label || '健康'}</td></tr>`; }).join('')}</tbody></table></div>`;
+  }
+
+  function teamRegularTableHTML() {
+    const userAverages = seasonAverages();
+    return `<div class="career-table-wrap"><table class="career-table team-data-table"><thead><tr><th>球员</th><th>场次</th><th>分钟</th><th>球权</th><th>得分</th><th>篮板</th><th>助攻</th><th>抢断</th><th>盖帽</th><th>失误</th><th>三分%</th></tr></thead><tbody>${currentTeamRoster().map(player => {
+      const stats = player.isUser ? { games: state.season.playerGames || 0, minutes: userAverages.min, usage: state.season.roleProfile?.usage, ...userAverages } : player.lastSeason;
+      return `<tr class="${player.isUser ? 'is-user-row' : ''}"><td>${player.isUser ? '我' : player.name}</td><td>${stats?.games ?? '--'}</td><td>${stats?.minutes ?? stats?.min ?? '--'}</td><td>${stats?.usage ?? '--'}${stats?.usage != null ? '%' : ''}</td><td>${stats?.pts ?? '--'}</td><td>${stats?.reb ?? '--'}</td><td>${stats?.ast ?? '--'}</td><td>${stats?.stl ?? '--'}</td><td>${stats?.blk ?? '--'}</td><td>${stats?.tov ?? '--'}</td><td>${stats?.threePct ?? '--'}${stats?.threePct != null ? '%' : ''}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  }
+
+  function teamPostseasonTableHTML() {
+    const stats = state.season.postseasonPlayerStats || {};
+    const rows = currentTeamRoster().map(player => {
+      const entry = stats[player.id];
+      const averages = entry ? averagesFromTotals(entry.totals, entry.games) : null;
+      return `<tr class="${player.isUser ? 'is-user-row' : ''}"><td>${player.isUser ? '我' : player.name}</td><td>${entry?.games || 0}</td><td>${averages?.min ?? '--'}</td><td>${averages?.pts ?? '--'}</td><td>${averages?.reb ?? '--'}</td><td>${averages?.ast ?? '--'}</td><td>${averages?.stl ?? '--'}</td><td>${averages?.blk ?? '--'}</td><td>${averages?.tov ?? '--'}</td><td>${averages?.fgPct ?? '--'}${averages ? '%' : ''}</td></tr>`;
+    }).join('');
+    return `<p class="team-data-note">仅统计本赛季已完成的附加赛后系列赛；尚未出场显示 0。</p><div class="career-table-wrap"><table class="career-table team-data-table"><thead><tr><th>球员</th><th>场次</th><th>分钟</th><th>得分</th><th>篮板</th><th>助攻</th><th>抢断</th><th>盖帽</th><th>失误</th><th>投篮%</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function showTeamCenter(activeTab = 'roster') {
+    if (!TEAM_CENTER_TABS.some(([key]) => key === activeTab)) activeTab = 'roster';
+    const team = DATA.getTeam(state.careerTeam);
+    const panels = { roster: teamRosterTableHTML, regular: teamRegularTableHTML, postseason: teamPostseasonTableHTML };
+    modalRoot.innerHTML = `<section class="modal career-history-modal team-center-modal" role="dialog" aria-modal="true" aria-labelledby="team-center-title"><header class="modal-head"><div class="team-center-heading"><img src="${team.logo}" alt=""><div><span class="modal-kicker">TEAM CENTER</span><h2 id="team-center-title">${team.name}</h2></div></div><button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">×</button></header><nav class="career-archive-tabs" aria-label="球队数据分类">${TEAM_CENTER_TABS.map(([key, label]) => `<button class="${key === activeTab ? 'is-active' : ''}" type="button" data-action="team-center-tab" data-team-tab="${key}">${label}</button>`).join('')}</nav><div class="modal-body career-archive-content">${panels[activeTab]()}</div></section>`;
+  }
+
+  function showAttributeImpacts() {
+    modalRoot.innerHTML = `<section class="modal attribute-impact-modal" role="dialog" aria-modal="true" aria-labelledby="attribute-impact-title"><header class="modal-head"><div><span class="modal-kicker">ATTRIBUTE GUIDE</span><h2 id="attribute-impact-title">能力值实际影响</h2></div><button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">×</button></header><div class="modal-body"><p class="team-data-note">属性会共同参与数据与球队战力计算，总评只负责稳定表现，不会覆盖专项差异。</p><div class="attribute-impact-list">${DATA.ATTRS.map(([key, name]) => { const value = state.attrs[key]; const grade = DATA.grade(value); return `<article><div><span style="--grade-color:${grade.color}">${grade.label}</span><b>${name}</b><strong>${value}</strong></div><ul>${(DATA.ATTRIBUTE_IMPACTS[key] || []).map(item => `<li>${item}</li>`).join('')}</ul></article>`; }).join('')}</div></div></section>`;
+  }
+
+  function currentRetirementEligibility() {
+    return SIM.retirementEligibility({ age: state.career.age, currentOvr: state.finalOVR, peakOvr: state.career.peakOVR, seasons: state.career.history.length + (state.season.archived ? 0 : 1), minutes: state.season.roleProfile?.minutes || 0, forcedRetirement: state.career.forcedRetirement });
+  }
+
+  function retirementButtonHTML() {
+    const eligibility = currentRetirementEligibility();
+    if (!eligibility.eligible || state.career.seasonNumber >= CAREER_SEASONS) return '';
+    return '<button class="danger-btn" type="button" data-action="request-retirement">提前退役</button>';
+  }
+
+  function showRetirementConfirmation() {
+    const eligibility = currentRetirementEligibility();
+    if (!eligibility.eligible || !['ended', 'champion'].includes(state.season.stage)) return;
+    modalRoot.innerHTML = `<section class="modal retirement-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="retirement-title"><header class="modal-head"><h2 id="retirement-title">确认提前退役</h2><button class="modal-close" type="button" data-action="close-modal" aria-label="关闭">×</button></header><div class="modal-body"><div class="retirement-decision"><span>${state.career.age} 岁</span><b>${state.finalOVR} OVR</b><small>巅峰 ${state.career.peakOVR} OVR · 已完成 ${state.career.history.length + (state.season.archived ? 0 : 1)} 季</small></div><p class="confirm-copy">符合条件：${eligibility.reasons.join('、')}。确认后，本赛季会写入生涯档案，并立即进入不可撤销的生涯总结。</p><div class="modal-decision-actions"><button class="secondary-btn" type="button" data-action="close-modal">继续生涯</button><button class="danger-btn" type="button" data-action="confirm-retirement">确认退役</button></div></div></section>`;
+  }
+
+  function confirmVoluntaryRetirement() {
+    const eligibility = currentRetirementEligibility();
+    if (!eligibility.eligible || !['ended', 'champion'].includes(state.season.stage)) return;
+    archiveCareerSeason();
+    state.career.completed = true;
+    state.career.voluntaryRetirement = true;
+    state.career.retirementAge = state.career.age;
+    state.career.pendingOffseason = null;
+    state.career.transactions.push({ season: state.career.seasonNumber, age: state.career.age, type: '主动退役', teamId: state.careerTeam, text: `在${DATA.getTeam(state.careerTeam).name}宣布提前退役` });
+    transitionSeasonStage('career-complete');
+    closeModal();
+    renderSeason();
+    saveGame();
   }
 
   function careerDocumentaryChapters(career, standing) {
@@ -3630,10 +3795,12 @@
       <section class="season-panel">
         <h2>第 ${state.career.seasonNumber} 季落幕</h2>
         <p class="confirm-copy">${reason}。赛季数据将写入生涯履历；若发生交易或合同到期，将由我确认下一步。</p>
+        ${state.season.finalsMvp ? `<div class="finals-mvp-callout is-neutral"><span>FINALS MVP</span><b>${state.season.finalsMvp.name} · ${DATA.getTeam(state.season.finalsMvp.teamId).name}</b><small>${state.season.finalsMvp.stats.pts} 分 · ${state.season.finalsMvp.stats.reb} 篮板 · ${state.season.finalsMvp.stats.ast} 助攻 · ${state.season.finalsMvp.stats.fgPct}%</small></div>` : ''}
         ${playoffRows ? `<div class="playoff-bracket">${playoffRows}</div>` : ''}
         <div class="season-actions offseason-actions">
           <button class="secondary-btn" type="button" data-action="career-history">查看生涯数据</button>
           ${tradeButtonHTML()}
+          ${retirementButtonHTML()}
           <button class="primary-btn" type="button" data-action="advance-career">${state.career.forcedRetirement ? '因伤结束生涯' : (state.career.seasonNumber >= CAREER_SEASONS ? '结束生涯' : '进入休赛期')}</button>
         </div>
       </section>`;
@@ -3645,9 +3812,11 @@
         <img src="${team.logo}" alt="${team.name}队标">
         <h2>联盟总冠军</h2>
         <p>${team.name} · ${state.finalOVR} OVR · ${state.archetype.label}</p>
+        ${state.season.finalsMvp ? `<div class="finals-mvp-callout"><span>FINALS MVP</span><b>${state.season.finalsMvp.isUser ? '我当选总决赛最有价值球员' : `${state.season.finalsMvp.name} 当选总决赛最有价值球员`}</b><small>${state.season.finalsMvp.stats.pts} 分 · ${state.season.finalsMvp.stats.reb} 篮板 · ${state.season.finalsMvp.stats.ast} 助攻 · ${state.season.finalsMvp.stats.fgPct}%</small></div>` : ''}
         <div class="season-actions offseason-actions">
           <button class="secondary-btn" type="button" data-action="career-history">查看生涯数据</button>
           ${tradeButtonHTML()}
+          ${retirementButtonHTML()}
           <button class="primary-btn" type="button" data-action="advance-career">${state.career.forcedRetirement ? '因伤结束生涯' : (state.career.seasonNumber >= CAREER_SEASONS ? '带着冠军退役' : '进入休赛期')}</button>
         </div>
       </section>`;
@@ -4150,6 +4319,11 @@
     if (action === 'series') simulateSeries();
     if (action === 'career-history') showCareerHistory();
     if (action === 'career-history-tab') showCareerHistory(element.dataset.careerTab);
+    if (action === 'team-center') showTeamCenter();
+    if (action === 'team-center-tab') showTeamCenter(element.dataset.teamTab);
+    if (action === 'attribute-impact') showAttributeImpacts();
+    if (action === 'request-retirement') showRetirementConfirmation();
+    if (action === 'confirm-retirement') confirmVoluntaryRetirement();
     if (action === 'request-trade') requestTrade();
     if (action === 'advance-career') advanceCareer();
     if (action === 'acknowledge-movement') closeModal();
@@ -4219,6 +4393,7 @@
   const tradeDebug = debugParams.get('tradeTest') === '1';
   const legacyDebug = debugParams.get('legacyTest');
   const offseasonDebug = debugParams.get('offseasonTest');
+  const retirementDebug = debugParams.get('retirementTest') === '1';
   const isLocalDebug = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
   if (isLocalDebug) {
     window.__GAME_DEBUG__ = {
@@ -4282,6 +4457,15 @@
   } else if (isLocalDebug && [1, 15, 20].includes(debugSeason)) {
     debugCareerMode = true;
     state = buildDebugCareerState(debugSeason);
+    if (retirementDebug && debugSeason < CAREER_SEASONS) {
+      state.career.age = 33;
+      state.career.peakOVR = 96;
+      state.career.currentOVR = 76;
+      state.finalOVR = 76;
+      state.season.age = 33;
+      state.season.roleProfile.minutes = 13;
+      syncUserLeaguePlayer();
+    }
     renderSeason();
     if (tradeDebug) {
       state.career.contract.yearsRemaining = 2;

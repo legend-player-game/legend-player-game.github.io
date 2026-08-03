@@ -44,6 +44,13 @@ test('All-NBA display labels always archive under the canonical award key', () =
   assert.equal(STATE.canonicalAwardLabel('最有价值球员'), '最有价值球员');
 });
 
+test('save migration initializes postseason records and voluntary retirement flags', () => {
+  const migrated = STATE.migrateSave({ schemaVersion: 6, career: {}, season: { stage: 'ended' } }, 7);
+  assert.deepEqual(migrated.season.postseasonPlayerStats, {});
+  assert.equal(migrated.season.finalsMvp, null);
+  assert.equal(migrated.career.voluntaryRetirement, false);
+});
+
 test('save snapshot is serializable and trims selected player data', () => {
   const snapshot = STATE.createSaveSnapshot({
     screen: 'build',

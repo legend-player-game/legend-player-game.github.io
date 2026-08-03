@@ -486,3 +486,17 @@ test('career title conditions do not award empty prestige labels', () => {
   assert.equal(titles.achieved.length, 0);
   assert.equal(titles.next.title, '联盟门面');
 });
+
+test('Finals MVP scoring rewards complete championship-series production', () => {
+  const scorer = SIM.calculateFinalsMvpScore({ games: 6, pts: 31.2, reb: 6.1, ast: 5.4, stl: 1.2, blk: 0.5, tov: 3.1, min: 39, fgPct: 49.2 });
+  const complete = SIM.calculateFinalsMvpScore({ games: 6, pts: 27.4, reb: 10.8, ast: 8.7, stl: 1.8, blk: 1.1, tov: 2.4, min: 40, fgPct: 52.1 });
+  assert.ok(complete > scorer);
+});
+
+test('early retirement requires both career tenure and a decline condition', () => {
+  assert.equal(SIM.retirementEligibility({ age: 27, currentOvr: 96, peakOvr: 97, seasons: 9, minutes: 36 }).eligible, false);
+  assert.equal(SIM.retirementEligibility({ age: 35, currentOvr: 83, peakOvr: 96, seasons: 4, minutes: 25 }).eligible, false);
+  const veteran = SIM.retirementEligibility({ age: 33, currentOvr: 76, peakOvr: 94, seasons: 15, minutes: 13 });
+  assert.equal(veteran.eligible, true);
+  assert.ok(veteran.reasons.length >= 2);
+});

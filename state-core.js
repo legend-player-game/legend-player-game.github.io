@@ -113,7 +113,10 @@
       save.season.isSimulating = false;
       save.season.playInSimulation = null;
       save.season.seriesSimulation = null;
+      if (!save.season.postseasonPlayerStats || typeof save.season.postseasonPlayerStats !== 'object') save.season.postseasonPlayerStats = {};
+      if (save.season.finalsMvp === undefined) save.season.finalsMvp = null;
     }
+    if (save.career && save.career.voluntaryRetirement === undefined) save.career.voluntaryRetirement = false;
     normalizeLeagueRatings(save);
     normalizeCareerAwards(save);
     return save;

@@ -2492,7 +2492,7 @@ button.attribute-slot:not(:disabled):hover {
 
 .career-season-toolbar {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(170px, 1fr) repeat(3, auto);
   gap: 12px;
   align-items: center;
   margin: 12px 0;
@@ -2536,6 +2536,131 @@ button.attribute-slot:not(:disabled):hover {
 .career-event-strip b {
   flex: 0 0 auto;
   color: var(--orange-dark);
+}
+
+.team-center-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-center-heading img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+
+.team-data-table {
+  min-width: 850px;
+}
+
+.team-data-table tr.is-user-row td {
+  color: var(--orange-dark);
+  background: #fff5df;
+  font-weight: 800;
+}
+
+.team-data-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.attribute-impact-modal {
+  width: min(94vw, 820px);
+}
+
+.attribute-impact-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.attribute-impact-list article {
+  min-width: 0;
+  padding: 13px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,0.45);
+}
+
+.attribute-impact-list article > div {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.attribute-impact-list article > div span {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  background: var(--grade-color);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.attribute-impact-list article strong {
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+.attribute-impact-list ul {
+  margin: 9px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.finals-mvp-callout {
+  width: min(100%, 560px);
+  margin: 16px auto;
+  padding: 14px 16px;
+  border: 2px solid #9b7414;
+  background: #fff7cf;
+  text-align: left;
+}
+
+.finals-mvp-callout span,
+.finals-mvp-callout b,
+.finals-mvp-callout small {
+  display: block;
+}
+
+.finals-mvp-callout span {
+  color: #8b6814;
+  font-family: var(--font-display);
+  font-size: 10px;
+}
+
+.finals-mvp-callout b { margin: 3px 0; }
+.finals-mvp-callout small { color: var(--muted); }
+.finals-mvp-callout.is-neutral { border-color: var(--line); background: var(--white); }
+
+.retirement-decision {
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  text-align: center;
+}
+
+.retirement-decision span,
+.retirement-decision small { color: var(--muted); }
+.retirement-decision b { margin: 4px 0; font-family: var(--font-display); font-size: 34px; }
+
+.modal-decision-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .season-context-grid {
@@ -3284,6 +3409,10 @@ button.attribute-slot:not(:disabled):hover {
     grid-column: 1 / -1;
   }
 
+  .attribute-impact-list {
+    grid-template-columns: 1fr;
+  }
+
   .career-average-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -3355,6 +3484,10 @@ button.attribute-slot:not(:disabled):hover {
 @media (max-width: 420px) {
   .modal-root {
     padding: 8px;
+  }
+
+  .modal-decision-actions {
+    grid-template-columns: 1fr;
   }
 
   .movement-route {

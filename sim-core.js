@@ -442,6 +442,35 @@
     };
   }
 
+  function calculateFinalsMvpScore(player) {
+    const games = Math.max(1, Number(player?.games) || 0);
+    const pts = Number(player?.pts) || 0;
+    const reb = Number(player?.reb) || 0;
+    const ast = Number(player?.ast) || 0;
+    const stl = Number(player?.stl) || 0;
+    const blk = Number(player?.blk) || 0;
+    const tov = Number(player?.tov) || 0;
+    const minutes = Number(player?.min ?? player?.minutes) || 0;
+    const fgPct = Number(player?.fgPct) || 0;
+    const impact = pts + reb * 0.72 + ast * 0.92 + stl * 1.7 + blk * 1.55 - tov * 0.85;
+    const efficiency = clamp((fgPct - 42) * 0.12, -1.5, 3);
+    const workload = clamp((minutes - 24) * 0.08, -1, 1.2);
+    const availability = clamp(games / 4, 0.65, 1);
+    return Math.round((impact + efficiency + workload) * availability * 100) / 100;
+  }
+
+  function retirementEligibility({ age = 18, currentOvr = 99, peakOvr = currentOvr, seasons = 0, minutes = 36, forcedRetirement = false } = {}) {
+    const decline = Math.max(0, Number(peakOvr) - Number(currentOvr));
+    const reasons = [];
+    if (forcedRetirement) reasons.push('医疗评估建议结束生涯');
+    if (Number(age) >= 34) reasons.push('已进入生涯末期');
+    if (Number(age) >= 32 && Number(currentOvr) <= 78) reasons.push('年龄与能力均明显下滑');
+    if (Number(age) >= 30 && decline >= 10) reasons.push(`较巅峰下降 ${decline} OVR`);
+    if (Number(age) >= 30 && Number(minutes) <= 14) reasons.push('预计轮换时间已降至14分钟或以下');
+    const eligible = Number(seasons) >= 5 && reasons.length > 0;
+    return { eligible, decline, reasons: eligible ? reasons : [], minimumSeasons: 5 };
+  }
+
   function calculateFranchiseLegacyScore(profile = {}) {
     const seasons = Array.isArray(profile.seasons) ? profile.seasons : [];
     const historicalChampionships = Math.max(0, Number(profile.historicalChampionships) || 0);
@@ -577,6 +606,7 @@
     const awards = career?.awardCounts || {};
     const mvp = awards['最有价值球员'] || 0;
     const dpoy = awards['最佳防守球员'] || 0;
+    const finalsMvp = awards['总决赛最有价值球员'] || 0;
     const allNba = awards['最佳阵容'] || 0;
     const scoringTitles = awards['常规赛得分王'] || 0;
     const rookieAwards = awards['年度最佳新秀'] || 0;
@@ -593,7 +623,7 @@
     const peakRating = ratingFromMilestones(peakOvr, [[0, 0], [75, 10], [80, 25], [85, 45], [90, 65], [95, 82], [99, 94]]);
     const topFiveRating = ratingFromMilestones(topFiveOvr, [[0, 0], [75, 8], [80, 22], [85, 42], [90, 63], [95, 80], [99, 92]]);
     const peakDominance = clamp(Math.round(peakRating * 0.72 + topFiveRating * 0.18 + Math.min(10, mvp * 4 + scoringTitles * 1.5)), 0, 100);
-    const personalHonors = clamp(Math.round(mvp * 22 + dpoy * 14 + allNba * 7 + scoringTitles * 5 + rookieAwards * 2), 0, 100);
+    const personalHonors = clamp(Math.round(mvp * 22 + finalsMvp * 12 + dpoy * 14 + allNba * 7 + scoringTitles * 5 + rookieAwards * 2), 0, 100);
     const finalsAppearances = history.filter(season => season.champion || String(season.postseason).includes('总决赛')).length;
     const deepRuns = history.filter(season => String(season.postseason).includes('分区决赛')).length;
     const winningResume = clamp(Math.round(championships * 25 + Math.max(0, finalsAppearances - championships) * 8 + deepRuns * 3 + history.filter(season => season.wins >= 50).length * 1.5), 0, 100);
@@ -746,6 +776,8 @@
     calculateStatProfile,
     historicalAttributeCeiling,
     calculateMvpScore,
+    calculateFinalsMvpScore,
+    retirementEligibility,
     calculateFranchiseLegacyScore,
     calculateFranchiseStanding,
     calculateMotherTeamRetention,
