@@ -459,6 +459,57 @@
     return Math.round((impact + efficiency + workload) * availability * 100) / 100;
   }
 
+  function calculateAllNbaScore(player) {
+    const games = Math.max(1, Number(player?.games) || 0);
+    const availability = clamp(games / 82, 0, 1);
+    const pts = Number(player?.pts) || 0;
+    const reb = Number(player?.reb) || 0;
+    const ast = Number(player?.ast) || 0;
+    const stl = Number(player?.stl) || 0;
+    const blk = Number(player?.blk) || 0;
+    const tov = Number(player?.tov) || 0;
+    const wins = Number(player?.wins) || 0;
+    const trueShooting = Number(player?.trueShooting ?? player?.ts) || 56;
+    const defense = Number(player?.defense) || 70;
+    const production = pts * 0.78 + reb * 0.3 + ast * 0.42 + stl * 0.95 + blk * 0.9 - tov * 0.28;
+    const efficiency = clamp((trueShooting - 54) * 0.22, -2.2, 3.3);
+    const teamSuccess = clamp((wins - 41) * 0.13, -2.6, 3.4);
+    const defenseValue = clamp((defense - 72) * 0.055, -0.8, 1.5);
+    const availabilityValue = clamp((availability - 0.79) * 5, -1.5, 1.1);
+    const ratingStability = clamp(((Number(player?.ovr) || 75) - 80) * 0.08, -0.8, 1.5);
+    return Math.round((production + efficiency + teamSuccess + defenseValue + availabilityValue + ratingStability) * 100) / 100;
+  }
+
+  function selectAllNbaTeams(players, { mvpFinalists = [] } = {}) {
+    const keyOf = player => player?.id || `${player?.teamId || ''}:${player?.name || ''}:${player?.isUser ? 'user' : ''}`;
+    const unique = [];
+    const seen = new Set();
+    (Array.isArray(players) ? players : []).forEach(player => {
+      const key = keyOf(player);
+      if (!player || seen.has(key)) return;
+      seen.add(key);
+      unique.push({ ...player, allNbaScore: calculateAllNbaScore(player) });
+    });
+    unique.sort((left, right) => right.allNbaScore - left.allNbaScore || (Number(right.wins) || 0) - (Number(left.wins) || 0));
+
+    const promoteTo = (candidate, maximumIndex) => {
+      const key = keyOf(candidate);
+      const index = unique.findIndex(player => keyOf(player) === key);
+      if (index < 0 || index <= maximumIndex) return;
+      const [player] = unique.splice(index, 1);
+      unique.splice(maximumIndex, 0, player);
+    };
+    if (mvpFinalists[0]) promoteTo(mvpFinalists[0], 0);
+    if (mvpFinalists[1]) promoteTo(mvpFinalists[1], 5);
+    if (mvpFinalists[2]) promoteTo(mvpFinalists[2], 6);
+
+    return unique.slice(0, 15).map((player, index) => ({
+      ...player,
+      allNbaRank: index + 1,
+      allNbaTeam: Math.floor(index / 5) + 1
+    }));
+  }
+
   function retirementEligibility({ age = 18, currentOvr = 99, peakOvr = currentOvr, seasons = 0, minutes = 36, forcedRetirement = false } = {}) {
     const decline = Math.max(0, Number(peakOvr) - Number(currentOvr));
     const reasons = [];
@@ -777,6 +828,8 @@
     historicalAttributeCeiling,
     calculateMvpScore,
     calculateFinalsMvpScore,
+    calculateAllNbaScore,
+    selectAllNbaTeams,
     retirementEligibility,
     calculateFranchiseLegacyScore,
     calculateFranchiseStanding,

@@ -2416,20 +2416,18 @@
     const userROTY = rookie.isUser;
     const userScoring = scoring.isUser;
     let allNba = '未入选';
-    const allNbaProfiles = [...mvpPool.map(player => ({ ...player, score: player.ovr * 0.5 + player.pts * 0.85 + player.reb * 0.2 + player.ast * 0.3 + player.wins * 0.08 })), ...(userAwardEligible ? [{ ...userProfile, score: state.finalOVR * 0.5 + Number(averages.pts) * 0.85 + Number(averages.reb) * 0.2 + Number(averages.ast) * 0.3 + state.season.wins * 0.08 }] : [])]
-      .sort((left, right) => right.score - left.score);
-    if (userAwardEligible) {
-      const allNbaRank = allNbaProfiles.findIndex(player => player.isUser) + 1;
-      if (allNbaRank <= 5) allNba = '最佳阵容一阵';
-      else if (allNbaRank <= 10) allNba = '最佳阵容二阵';
-      else if (allNbaRank <= 15) allNba = '最佳阵容三阵';
-    }
+    const allNbaSelections = SIM.selectAllNbaTeams(
+      [...mvpPool, ...(userAwardEligible ? [userProfile] : [])],
+      { mvpFinalists: mvpRank }
+    );
+    const userAllNba = allNbaSelections.find(player => player.isUser);
+    if (userAllNba) allNba = `最佳阵容${['一', '二', '三'][userAllNba.allNbaTeam - 1]}阵`;
     const awards = [
       { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), reason: '综合个人产量、球队胜场、进攻主导权和赛季出勤率评定；同队球星会分流选票，前三候选每队最多一人。' },
       { label: '最佳防守球员', short: 'DPOY', winner: dpoy.name, detail: awardCandidate(dpoy, 'dpoy').detail, isUser: userDPOY, candidates: dpoyRank.map(player => awardCandidate(player, 'dpoy')), reason: '重点比较防守属性、抢断盖帽、篮板保护和球队胜场。' },
       { label: '年度最佳新秀', short: 'ROTY', winner: rookie.name, detail: awardCandidate(rookie, 'rookie').detail, isUser: userROTY, candidates: rookieRank.map(player => awardCandidate(player, 'rookie')), reason: '仅比较本届新秀的即时能力、数据产量和承担角色。' },
       { label: '常规赛得分王', short: 'SC', winner: scoring.name, detail: awardCandidate(scoring, 'scoring').detail, isUser: userScoring, candidates: scoringRank.map(player => awardCandidate(player, 'scoring')), reason: '以符合出勤门槛后的场均得分为首要依据。' },
-      { label: '我的最佳阵容', recordLabel: '最佳阵容', short: 'ALL', winner: allNba, detail: allNba, isUser: allNba !== '未入选', candidates: [], reason: '综合位置表现、个人数据、球队战绩和出勤率确定入选阵容。' }
+      { label: '我的最佳阵容', recordLabel: '最佳阵容', short: 'ALL', winner: allNba, detail: userAllNba ? `联盟综合表现第 ${userAllNba.allNbaRank} 位 · ${allNba}` : allNba, isUser: Boolean(userAllNba), candidates: [], reason: '采用无位置限制的赛季综合表现榜，比较产量、效率、防守、球队战绩、出勤率与能力稳定性；MVP必入一阵，MVP第二、第三名最低进入二阵。' }
     ];
     state.career.league.awardHistory = STATE.upsertSeasonRecord(state.career.league.awardHistory, {
       seasonNumber: state.career.seasonNumber,

@@ -223,6 +223,37 @@ test('MVP finalists do not contain multiple stars from the same team', () => {
   assert.deepEqual(finalists.map(player => player.name), ['A队核心一', 'B队核心', 'C队核心']);
 });
 
+test('All-NBA scoring balances production, efficiency, defense and team success', () => {
+  const winningCore = SIM.calculateAllNbaScore({ games: 78, pts: 28, reb: 8, ast: 8, stl: 1.5, blk: 0.8, tov: 3, trueShooting: 62, wins: 56, defense: 88, ovr: 94 });
+  const emptyStats = SIM.calculateAllNbaScore({ games: 78, pts: 29, reb: 7, ast: 8, stl: 1, blk: 0.4, tov: 3.5, trueShooting: 57, wins: 38, defense: 76, ovr: 92 });
+  assert.ok(winningCore > emptyStats);
+});
+
+test('MVP winner is always All-NBA first team and other finalists cannot fall below second team', () => {
+  const players = Array.from({ length: 18 }, (_, index) => ({
+    id: `all-nba-${index}`,
+    name: `球员${index}`,
+    teamId: `T${index}`,
+    games: 75,
+    pts: 32 - index * 0.6,
+    reb: 8,
+    ast: 7,
+    stl: 1,
+    blk: 0.5,
+    tov: 2.8,
+    trueShooting: 60,
+    wins: 52,
+    defense: 82,
+    ovr: 92
+  }));
+  const mvpFinalists = [players[14], players[15], players[16]];
+  const selections = SIM.selectAllNbaTeams(players, { mvpFinalists });
+  assert.equal(selections.find(player => player.id === players[14].id).allNbaTeam, 1);
+  assert.equal(selections.find(player => player.id === players[15].id).allNbaTeam, 2);
+  assert.equal(selections.find(player => player.id === players[16].id).allNbaTeam, 2);
+  assert.equal(selections.length, 15);
+});
+
 test('generational playmaking unlocks higher offensive involvement and team impact', () => {
   const elite = SIM.calculateOffensiveUsage({
     ovr: 97, teamCoreOvr: 90, scoring: 92, playmaking: 99, minutes: 36, rank: 1, archetypeBonus: 3.5
