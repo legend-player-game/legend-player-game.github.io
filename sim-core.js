@@ -378,27 +378,91 @@
     };
   }
 
+  function calculateFranchiseLegacyScore(profile = {}) {
+    const seasons = Array.isArray(profile.seasons) ? profile.seasons : [];
+    const historicalChampionships = Math.max(0, Number(profile.historicalChampionships) || 0);
+    const seasonScore = seasons.reduce((total, season) => {
+      const games = Math.max(0, Number(season.games) || 0);
+      const availability = clamp(games / 82, 0, 1);
+      const ovr = Number(season.ovr) || 60;
+      const averages = season.averages || season;
+      const pts = Number(averages.pts) || 0;
+      const reb = Number(averages.reb) || 0;
+      const ast = Number(averages.ast) || 0;
+      const wins = Number(season.wins) || 0;
+      const quality = clamp((ovr - 70) / 25, 0, 1) * 8;
+      const production = clamp((pts + reb * 0.55 + ast * 0.75 - 10) / 30, 0, 1) * 8;
+      const winning = clamp((wins - 40) * 0.2, 0, 6);
+      return total + (quality + production + winning) * availability;
+    }, 0);
+    const awards = seasons.flatMap(season => Array.isArray(season.awards) ? season.awards : []);
+    const awardPoints = awards.reduce((total, award) => total + ({
+      '最有价值球员': 80,
+      '最佳防守球员': 55,
+      '最佳阵容': 22,
+      '常规赛得分王': 12,
+      '年度最佳新秀': 5
+    }[award] || 0), 0);
+    const titleValues = historicalChampionships === 0
+      ? [170, 125, 95]
+      : (historicalChampionships === 1 ? [140, 105, 85] : (historicalChampionships <= 3 ? [115, 90, 75] : [90, 75, 60]));
+    let coreChampionships = 0;
+    let championshipPoints = 0;
+    seasons.filter(season => season.champion).forEach((season, index) => {
+      const minutes = Number(season.averages?.min ?? season.minutes) || 0;
+      const ovr = Number(season.ovr) || 60;
+      const roleFactor = minutes >= 28 || ovr >= 86 ? 1 : (minutes >= 18 || ovr >= 78 ? 0.65 : 0.35);
+      if (roleFactor === 1) coreChampionships += 1;
+      const titleValue = titleValues[Math.min(index, titleValues.length - 1)];
+      championshipPoints += titleValue * roleFactor;
+    });
+    const total = Math.round(seasonScore + awardPoints + championshipPoints);
+    return {
+      total,
+      seasonScore: Math.round(seasonScore),
+      awardPoints: Math.round(awardPoints),
+      championshipPoints: Math.round(championshipPoints),
+      coreChampionships
+    };
+  }
+
   function calculateFranchiseStanding(profile = {}) {
     const score = Math.max(0, Number(profile.score) || 0);
     const seasons = Math.max(0, Number(profile.seasons) || 0);
     const consecutive = Math.max(0, Number(profile.consecutive) || 0);
     const championships = Math.max(0, Number(profile.championships) || 0);
     const majorAwards = Math.max(0, Number(profile.majorAwards) || 0);
+    const historicalChampionships = Math.max(0, Number(profile.historicalChampionships) || 0);
+    const coreChampionships = Math.max(0, Number(profile.coreChampionships) || 0);
     const legends = (Array.isArray(profile.legends) ? profile.legends : [])
       .map((legend, index) => ({ rank: index + 1, name: legend.name, score: Math.max(0, Number(legend.score) || 0) }))
       .sort((left, right) => right.score - left.score);
     const rawRank = legends.filter(legend => legend.score > score).length + 1;
+    let championshipRankCap = Infinity;
+    if (historicalChampionships === 0) {
+      if (coreChampionships >= 3) championshipRankCap = 2;
+      else if (coreChampionships >= 2) championshipRankCap = 3;
+      else if (coreChampionships >= 1) championshipRankCap = 5;
+    } else if (historicalChampionships === 1) {
+      if (coreChampionships >= 3) championshipRankCap = 3;
+      else if (coreChampionships >= 2) championshipRankCap = 5;
+    } else if (historicalChampionships <= 3 && coreChampionships >= 3) {
+      championshipRankCap = 5;
+    } else if (historicalChampionships >= 4 && coreChampionships >= 4) {
+      championshipRankCap = 5;
+    }
     const leader = legends[0] || null;
     const firstEligible = rawRank === 1 && seasons >= 8 && (championships >= 1 || majorAwards >= 2);
+    const scoreRank = firstEligible ? 1 : Math.max(rawRank, rawRank === 1 ? 2 : rawRank);
+    const displayedRank = Math.min(scoreRank, championshipRankCap);
     let status = '新加盟球员';
     if (firstEligible) status = '队史第一人';
-    else if (rawRank <= 3 && score >= (legends[Math.min(2, legends.length - 1)]?.score || 0)) status = '队史前三';
-    else if (rawRank <= 5 && score >= (legends[Math.min(4, legends.length - 1)]?.score || 0)) status = '队史前五';
+    else if (displayedRank <= 3) status = '队史前三';
+    else if (displayedRank <= 5) status = '队史前五';
     else if (score >= (legends[legends.length - 1]?.score || 180) * 0.75) status = '队史代表';
     else if (consecutive >= 8) status = '功勋球员';
     else if (consecutive >= 5) status = '长期成员';
     else if (consecutive >= 2) status = '轮换骨干';
-    const displayedRank = firstEligible ? 1 : Math.max(rawRank, rawRank === 1 ? 2 : rawRank);
     const ranked = displayedRank <= legends.length;
     const nextLegend = firstEligible ? null : legends[Math.max(0, displayedRank - 2)] || leader;
     return {
@@ -407,9 +471,14 @@
       ranked,
       status,
       firstEligible,
+      championshipRankCap: Number.isFinite(championshipRankCap) ? championshipRankCap : null,
+      championshipGuaranteeApplied: Number.isFinite(championshipRankCap) && championshipRankCap < scoreRank,
       leader,
       nextLegend,
       rankLabel: ranked ? `队史功勋榜第 ${displayedRank}` : `暂未进入队史前 ${legends.length}`,
+      rankBasis: Number.isFinite(championshipRankCap) && championshipRankCap < scoreRank
+        ? `${coreChampionships} 次核心冠军触发队史前 ${championshipRankCap} 保障`
+        : '按综合贡献分排位',
       scoreToNext: nextLegend ? Math.max(0, Math.ceil(nextLegend.score - score + 1)) : 0
     };
   }
@@ -611,6 +680,7 @@
     calculateStatProfile,
     historicalAttributeCeiling,
     calculateMvpScore,
+    calculateFranchiseLegacyScore,
     calculateFranchiseStanding,
     calculateMotherTeamRetention,
     calculateCareerLegacy,

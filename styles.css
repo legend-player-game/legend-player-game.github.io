@@ -2094,6 +2094,15 @@ button.attribute-slot:not(:disabled):hover {
   font-weight: 700;
 }
 
+.offer-franchise-history .my-franchise-score,
+.offer-franchise-history .my-franchise-basis {
+  color: #47382c;
+}
+
+.offer-franchise-history .my-franchise-basis {
+  font-weight: 700;
+}
+
 .historical-unlock span {
   display: block;
   margin-bottom: 4px;

@@ -255,6 +255,72 @@ test('a historic championship career can legitimately become franchise number on
   assert.equal(standing.firstEligible, true);
 });
 
+test('two core titles guarantee a top-three place for a previously titleless franchise', () => {
+  const standing = SIM.calculateFranchiseStanding({
+    score: 210,
+    seasons: 7,
+    consecutive: 7,
+    championships: 2,
+    majorAwards: 0,
+    historicalChampionships: 0,
+    coreChampionships: 2,
+    legends: [620, 510, 430, 350, 280].map((score, index) => ({ name: `功勋${index + 1}`, score }))
+  });
+  assert.equal(standing.rawRank, 6);
+  assert.equal(standing.rank, 3);
+  assert.equal(standing.status, '队史前三');
+  assert.equal(standing.championshipGuaranteeApplied, true);
+});
+
+test('one core title guarantees top five for a previously titleless franchise', () => {
+  const standing = SIM.calculateFranchiseStanding({
+    score: 180,
+    seasons: 5,
+    championships: 1,
+    historicalChampionships: 0,
+    coreChampionships: 1,
+    legends: [620, 510, 430, 350, 280].map((score, index) => ({ name: `功勋${index + 1}`, score }))
+  });
+  assert.equal(standing.rank, 5);
+  assert.equal(standing.status, '队史前五');
+});
+
+test('bench titles add legacy points but do not trigger core-title rank protection', () => {
+  const score = SIM.calculateFranchiseLegacyScore({
+    historicalChampionships: 0,
+    seasons: [
+      { games: 60, ovr: 72, wins: 50, champion: true, averages: { pts: 4, reb: 2, ast: 1, min: 10 }, awards: [] },
+      { games: 55, ovr: 73, wins: 52, champion: true, averages: { pts: 5, reb: 2, ast: 1, min: 11 }, awards: [] }
+    ]
+  });
+  const standing = SIM.calculateFranchiseStanding({
+    score: score.total,
+    seasons: 2,
+    championships: 2,
+    historicalChampionships: 0,
+    coreChampionships: score.coreChampionships,
+    legends: [620, 510, 430, 350, 280].map((legendScore, index) => ({ name: `功勋${index + 1}`, score: legendScore }))
+  });
+  assert.equal(score.coreChampionships, 0);
+  assert.equal(standing.championshipGuaranteeApplied, false);
+  assert.ok(standing.rank > 3);
+});
+
+test('three core titles cannot make a player number one without passing the leader', () => {
+  const standing = SIM.calculateFranchiseStanding({
+    score: 590,
+    seasons: 12,
+    championships: 3,
+    majorAwards: 3,
+    historicalChampionships: 0,
+    coreChampionships: 3,
+    legends: [{ name: '真实队史第一人', score: 600 }, { name: '真实队史第二人', score: 480 }]
+  });
+  assert.equal(standing.rank, 2);
+  assert.equal(standing.firstEligible, false);
+  assert.equal(standing.status, '队史前三');
+});
+
 function careerFixture(overrides = {}) {
   const history = Array.from({ length: 20 }, (_, index) => ({
     seasonNumber: index + 1,

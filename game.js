@@ -1387,9 +1387,6 @@
     const seasons = (state.career?.history || []).filter(entry => entry.teamId === teamId);
     const championships = seasons.filter(entry => entry.champion).length;
     const majorAwards = seasons.reduce((sum, entry) => sum + (entry.awards || []).filter(label => ['最有价值球员', '最佳防守球员'].includes(label)).length, 0);
-    const score = seasons.reduce((sum, entry) => (
-      sum + (entry.games / 82) * Math.max(0, entry.ovr - 70) * 0.55 + entry.wins * 0.05
-    ), 0) + championships * 28 + majorAwards * 18 + seasons.reduce((sum, entry) => sum + (entry.awards || []).filter(label => label === '最佳阵容').length * 6, 0);
     let consecutive = 0;
     for (let index = state.career.history.length - 1; index >= 0; index -= 1) {
       if (state.career.history[index].teamId !== teamId) break;
@@ -1397,12 +1394,19 @@
     }
     const historyYear = (state.career?.startYear || DATA.getEra(state.eraKey).startYear) + Math.max(0, (state.career?.seasonNumber || 1) - 1);
     const franchiseHistory = DATA.getTeamHistory(teamId, historyYear);
+    const scoreBreakdown = SIM.calculateFranchiseLegacyScore({
+      seasons,
+      historicalChampionships: franchiseHistory.championshipYears.length
+    });
+    const score = scoreBreakdown.total;
     const standing = SIM.calculateFranchiseStanding({
       score,
       seasons: seasons.length,
       consecutive,
       championships,
       majorAwards,
+      historicalChampionships: franchiseHistory.championshipYears.length,
+      coreChampionships: scoreBreakdown.coreChampionships,
       legends: franchiseHistory.legends
     });
     return {
@@ -1410,7 +1414,8 @@
       consecutive,
       championships,
       majorAwards,
-      score: Math.round(score),
+      score,
+      scoreBreakdown,
       historicalChampionships: franchiseHistory.championshipYears.length,
       championshipYears: franchiseHistory.championshipYears,
       legends: franchiseHistory.legends,
@@ -1604,6 +1609,9 @@
         userFranchiseRank: candidate.isMotherTeam ? motherLegacy.rank : null,
         userFranchiseRankLabel: candidate.isMotherTeam ? motherLegacy.rankLabel : null,
         userFranchiseStatus: candidate.isMotherTeam ? motherLegacy.status : null,
+        userFranchiseScore: candidate.isMotherTeam ? motherLegacy.score : null,
+        userFranchiseBreakdown: candidate.isMotherTeam ? motherLegacy.scoreBreakdown : null,
+        userFranchiseRankBasis: candidate.isMotherTeam ? motherLegacy.rankBasis : null,
         userTeamChampionships: candidate.isMotherTeam ? motherLegacy.championships : 0,
         attitude: candidate.isMotherTeam
           ? (motherLegacy.status === '队史第一人' ? '队史核心挽留' : (age >= 34 ? '功勋老将短约' : '母队续约'))
@@ -3737,13 +3745,19 @@
       ? `现实队史 ${offer.championshipYears.length} 次 NBA 总冠军（${offer.championshipYears.join('、')}）`
       : '现实队史尚无 NBA 总冠军';
     const legendCopy = (offer.franchiseLegends || []).map(legend => `${legend.rank}.${legend.name}`).join(' · ');
+    const legacyBreakdown = offer.userFranchiseBreakdown;
+    const legacyScoreCopy = legacyBreakdown
+      ? `贡献分 ${offer.userFranchiseScore}：赛季 ${legacyBreakdown.seasonScore} + 荣誉 ${legacyBreakdown.awardPoints} + 冠军 ${legacyBreakdown.championshipPoints}`
+      : '';
     return `<article class="contract-offer${offer.isCurrentTeam ? ' is-current' : ''}">
       <header><img src="${team.logo}" alt=""><div><span>${offer.isCurrentTeam ? '母队续约报价' : offer.phase}</span><h3>${team.name}</h3><p>上赛季${team.conference === 'EAST' ? '东部' : '西部'}第 ${offer.rank} · ${offer.wins}-${offer.losses}</p></div><strong>${offer.years} 年<br><small>$${offer.annualSalary}M / 年</small></strong></header>
       <p class="offer-attitude"><b>${offer.attitude}</b>${offer.retentionReasons?.length ? ` · ${offer.retentionReasons.join('、')}` : ''}</p>
       <div class="offer-franchise-history">
         <p><b>球队历史</b>${championshipCopy}${offer.userTeamChampionships ? `；我为本队新增 ${offer.userTeamChampionships} 冠` : ''}</p>
         <p><b>功勋前五</b>${legendCopy}</p>
-        ${offer.isCurrentTeam ? `<p class="my-franchise-rank"><b>我的位置</b>${offer.userFranchiseRankLabel} · ${offer.userFranchiseStatus}</p>` : ''}
+        ${offer.isCurrentTeam ? `<p class="my-franchise-rank"><b>我的位置</b>${offer.userFranchiseRankLabel} · ${offer.userFranchiseStatus}</p>
+          <p class="my-franchise-score"><b>排位依据</b>${legacyScoreCopy}</p>
+          <p class="my-franchise-basis"><b>规则说明</b>${offer.userFranchiseRankBasis}</p>` : ''}
       </div>
       <div class="offer-role-grid"><div><span>预计角色</span><b>${offer.projection.role}</b></div><div><span>预计时间</span><b>${offer.projection.minutes} 分钟</b></div><div><span>预计球权</span><b>${offer.projection.usage}%</b></div><div><span>轮换顺位</span><b>第 ${offer.projection.rotationRank} 位</b></div></div>
       <p class="offer-competition"><b>位置竞争：</b>${competition}</p>
