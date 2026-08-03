@@ -49,14 +49,13 @@
 
   function normalizeCareerAwards(save) {
     const career = save?.career;
-    if (!career || typeof career !== 'object') return save;
-    if (Array.isArray(career.history)) {
+    if (career && typeof career === 'object' && Array.isArray(career.history)) {
       career.history.forEach(season => {
         if (!Array.isArray(season?.awards)) return;
         season.awards = [...new Set(season.awards.map(canonicalAwardLabel).filter(Boolean))];
       });
     }
-    const counts = career.awardCounts;
+    const counts = career && typeof career === 'object' ? career.awardCounts : null;
     if (counts && typeof counts === 'object') {
       Object.entries(AWARD_LABEL_ALIASES).forEach(([alias, canonical]) => {
         const aliasCount = Math.max(0, Number(counts[alias]) || 0);
@@ -69,6 +68,13 @@
         if (!award || typeof award !== 'object') return;
         award.recordLabel = canonicalAwardLabel(award.recordLabel || award.label);
       });
+      const userMvp = save.season.awards.find(award => award?.recordLabel === '最有价值球员' && award.isUser);
+      const userAllNba = save.season.awards.find(award => award?.recordLabel === '最佳阵容');
+      if (userMvp && userAllNba) {
+        userAllNba.winner = '最佳阵容一阵';
+        userAllNba.detail = '最佳阵容一阵';
+        userAllNba.isUser = true;
+      }
     }
     return save;
   }

@@ -51,6 +51,19 @@ test('save migration initializes postseason records and voluntary retirement fla
   assert.equal(migrated.career.voluntaryRetirement, false);
 });
 
+test('save migration repairs an MVP season that was stored as All-NBA second team', () => {
+  const migrated = STATE.migrateSave({
+    schemaVersion: 7,
+    season: { awards: [
+      { label: '最有价值球员', winner: '我', isUser: true },
+      { label: '我的最佳阵容', recordLabel: '最佳阵容', winner: '最佳阵容二阵', detail: '最佳阵容二阵', isUser: true }
+    ] }
+  }, 7);
+  const allNba = migrated.season.awards.find(award => award.recordLabel === '最佳阵容');
+  assert.equal(allNba.winner, '最佳阵容一阵');
+  assert.equal(allNba.detail, '最佳阵容一阵');
+});
+
 test('save snapshot is serializable and trims selected player data', () => {
   const snapshot = STATE.createSaveSnapshot({
     screen: 'build',
