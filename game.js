@@ -2427,7 +2427,7 @@
       { label: '最佳防守球员', short: 'DPOY', winner: dpoy.name, detail: awardCandidate(dpoy, 'dpoy').detail, isUser: userDPOY, candidates: dpoyRank.map(player => awardCandidate(player, 'dpoy')), reason: '重点比较防守属性、抢断盖帽、篮板保护和球队胜场。' },
       { label: '年度最佳新秀', short: 'ROTY', winner: rookie.name, detail: awardCandidate(rookie, 'rookie').detail, isUser: userROTY, candidates: rookieRank.map(player => awardCandidate(player, 'rookie')), reason: '仅比较本届新秀的即时能力、数据产量和承担角色。' },
       { label: '常规赛得分王', short: 'SC', winner: scoring.name, detail: awardCandidate(scoring, 'scoring').detail, isUser: userScoring, candidates: scoringRank.map(player => awardCandidate(player, 'scoring')), reason: '以符合出勤门槛后的场均得分为首要依据。' },
-      { label: '我的最佳阵容', short: 'ALL', winner: allNba, detail: allNba, isUser: allNba !== '未入选', candidates: [], reason: '综合位置表现、个人数据、球队战绩和出勤率确定入选阵容。' }
+      { label: '我的最佳阵容', recordLabel: '最佳阵容', short: 'ALL', winner: allNba, detail: allNba, isUser: allNba !== '未入选', candidates: [], reason: '综合位置表现、个人数据、球队战绩和出勤率确定入选阵容。' }
     ];
     state.career.league.awardHistory = STATE.upsertSeasonRecord(state.career.league.awardHistory, {
       seasonNumber: state.career.seasonNumber,
@@ -2726,7 +2726,9 @@
     const games = state.season.playerGames || 0;
     const totals = { ...freshPlayerTotals(), ...state.season.playerTotals };
     const averages = averagesFromTotals(totals, games);
-    const earnedAwards = state.season.awards.filter(award => award.isUser).map(award => award.label);
+    const earnedAwards = state.season.awards
+      .filter(award => award.isUser)
+      .map(award => STATE.canonicalAwardLabel(award.recordLabel || award.label));
     const entry = {
       seasonNumber: state.career.seasonNumber,
       seasonYear: state.career.startYear + state.career.seasonNumber - 1,

@@ -18,6 +18,32 @@ test('save migration removes hidden league rating differences', () => {
   assert.equal(migrated.season.seriesSimulation, null);
 });
 
+test('save migration repairs legacy All-NBA award labels and counts', () => {
+  const migrated = STATE.migrateSave({
+    schemaVersion: 7,
+    career: {
+      awardCounts: { '最有价值球员': 4, '最佳阵容': 2, '我的最佳阵容': 6 },
+      history: [
+        { seasonNumber: 1, awards: ['最有价值球员', '我的最佳阵容'] },
+        { seasonNumber: 2, awards: ['我的最佳阵容', '我的最佳阵容'] }
+      ]
+    },
+    season: {
+      awards: [{ label: '我的最佳阵容', winner: '最佳阵容一阵', isUser: true }]
+    }
+  }, 7);
+  assert.deepEqual(migrated.career.awardCounts, { '最有价值球员': 4, '最佳阵容': 8 });
+  assert.deepEqual(migrated.career.history[0].awards, ['最有价值球员', '最佳阵容']);
+  assert.deepEqual(migrated.career.history[1].awards, ['最佳阵容']);
+  assert.equal(migrated.season.awards[0].label, '我的最佳阵容');
+  assert.equal(migrated.season.awards[0].recordLabel, '最佳阵容');
+});
+
+test('All-NBA display labels always archive under the canonical award key', () => {
+  assert.equal(STATE.canonicalAwardLabel('我的最佳阵容'), '最佳阵容');
+  assert.equal(STATE.canonicalAwardLabel('最有价值球员'), '最有价值球员');
+});
+
 test('save snapshot is serializable and trims selected player data', () => {
   const snapshot = STATE.createSaveSnapshot({
     screen: 'build',

@@ -16,6 +16,14 @@
     'career-complete': new Set()
   };
 
+  const AWARD_LABEL_ALIASES = {
+    '我的最佳阵容': '最佳阵容'
+  };
+
+  function canonicalAwardLabel(label) {
+    return AWARD_LABEL_ALIASES[label] || label;
+  }
+
   function clone(value) {
     return value == null ? value : JSON.parse(JSON.stringify(value));
   }
@@ -36,6 +44,32 @@
   function normalizeLeagueRatings(save) {
     const players = save?.career?.league?.players;
     if (Array.isArray(players)) players.forEach(normalizePlayerRating);
+    return save;
+  }
+
+  function normalizeCareerAwards(save) {
+    const career = save?.career;
+    if (!career || typeof career !== 'object') return save;
+    if (Array.isArray(career.history)) {
+      career.history.forEach(season => {
+        if (!Array.isArray(season?.awards)) return;
+        season.awards = [...new Set(season.awards.map(canonicalAwardLabel).filter(Boolean))];
+      });
+    }
+    const counts = career.awardCounts;
+    if (counts && typeof counts === 'object') {
+      Object.entries(AWARD_LABEL_ALIASES).forEach(([alias, canonical]) => {
+        const aliasCount = Math.max(0, Number(counts[alias]) || 0);
+        if (aliasCount) counts[canonical] = Math.max(0, Number(counts[canonical]) || 0) + aliasCount;
+        delete counts[alias];
+      });
+    }
+    if (Array.isArray(save.season?.awards)) {
+      save.season.awards.forEach(award => {
+        if (!award || typeof award !== 'object') return;
+        award.recordLabel = canonicalAwardLabel(award.recordLabel || award.label);
+      });
+    }
     return save;
   }
 
@@ -81,6 +115,7 @@
       save.season.seriesSimulation = null;
     }
     normalizeLeagueRatings(save);
+    normalizeCareerAwards(save);
     return save;
   }
 
@@ -142,10 +177,12 @@
 
   return {
     canTransitionSeason,
+    canonicalAwardLabel,
     compactSave,
     createSaveSnapshot,
     hasMeaningfulProgress,
     migrateSave,
+    normalizeCareerAwards,
     normalizePlayerRating,
     parseSave,
     selectStoredSave,
