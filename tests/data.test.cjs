@@ -95,3 +95,19 @@ test('public and simulated OVR use one value in every era', () => {
   });
   global.GAME_DATA.setEra('current');
 });
+
+test('current-era 99 ratings are rare and limited to audited signature skills', () => {
+  global.GAME_DATA.setEra('current');
+  const ratings = Object.values(global.GAME_DATA.PLAYERS).flat().flatMap(player => (
+    global.GAME_DATA.ATTRS
+      .filter(([key]) => key !== 'POT' && player[key] === 99)
+      .map(([key]) => `${player.name}:${key}`)
+  ));
+  assert.deepEqual(ratings.sort(), [
+    '尼古拉-约基奇:PAS',
+    '斯蒂芬-库里:threePT',
+    '扬尼斯-阿德托昆博:DNK',
+    '扬尼斯-阿德托昆博:FIN',
+    '维克托·文班亚马:BLK'
+  ].sort());
+});

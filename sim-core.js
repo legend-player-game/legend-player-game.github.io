@@ -88,26 +88,51 @@
     }, {});
   }
 
-  function seriesWinProbability(ownStrength, opponentStrength, round) {
-    const difference = ownStrength - opponentStrength;
-    const logistic = 1 / (1 + Math.exp(-difference / 5.25));
-    const finalsParity = Math.max(0, Number(round) || 0) === 3 ? 0.012 : 0;
-    return clamp(logistic - Math.sign(difference) * finalsParity, 0.08, 0.92);
+  function seriesWinProbability(ownStrength, opponentStrength, round, context = {}) {
+    const ownSeed = Number(context.ownSeed) || 0;
+    const opponentSeed = Number(context.opponentSeed) || 0;
+    const ownWins = Number(context.ownWins) || 0;
+    const opponentWins = Number(context.opponentWins) || 0;
+    const isConferenceRound = Math.max(0, Number(round) || 0) < 3;
+    const seedPrior = isConferenceRound && ownSeed && opponentSeed
+      ? clamp((opponentSeed - ownSeed) * 0.35, -2.45, 2.45)
+      : 0;
+    const recordPrior = ownWins && opponentWins
+      ? clamp((ownWins - opponentWins) * 0.06, -0.96, 0.96)
+      : 0;
+    const homeCourt = context.homeCourt === true ? 0.35 : (context.homeCourt === false ? -0.35 : 0);
+    const difference = ownStrength - opponentStrength + seedPrior + recordPrior + homeCourt;
+    return clamp(1 / (1 + Math.exp(-difference / 3.6)), 0.06, 0.94);
   }
 
   function calculatePlayoffTeamStrength(players) {
     const rotation = (Array.isArray(players) ? players : [])
-      .map(player => Number(player?.effectiveOvr ?? player?.ovr) || 0)
-      .filter(value => value > 0)
-      .sort((left, right) => right - left)
+      .map(player => ({
+        rating: Number(player?.effectiveOvr ?? player?.ovr) || 0,
+        minutes: Math.max(0, Number(player?.minutes) || 0),
+        attrs: player?.attrs || null
+      }))
+      .filter(player => player.rating > 0)
+      .sort((left, right) => right.minutes - left.minutes || right.rating - left.rating)
       .slice(0, 8);
     if (!rotation.length) return 60;
-    const minuteWeights = [40, 38, 35, 32, 28, 25, 22, 20].slice(0, rotation.length);
+    const fallbackWeights = [40, 38, 35, 32, 28, 25, 22, 20];
+    const hasRealMinutes = rotation.some(player => player.minutes > 0);
+    const minuteWeights = rotation.map((player, index) => hasRealMinutes ? Math.max(8, player.minutes) : fallbackWeights[index]);
     const totalMinutes = minuteWeights.reduce((sum, value) => sum + value, 0);
-    const rotationStrength = rotation.reduce((sum, value, index) => sum + value * minuteWeights[index], 0) / totalMinutes;
-    const starBonus = rotation.slice(0, 3).reduce((sum, value) => sum + Math.max(0, value - 87) * 0.16, 0);
+    const rotationStrength = rotation.reduce((sum, player, index) => sum + player.rating * minuteWeights[index], 0) / totalMinutes;
+    const stars = rotation.slice().sort((left, right) => right.rating - left.rating).slice(0, 3);
+    const starBonus = stars.reduce((sum, player) => sum + Math.pow(Math.max(0, player.rating - 87), 1.22) * 0.22, 0);
+    const attributeAverage = key => {
+      const values = rotation.map(player => Number(player.attrs?.[key])).filter(Number.isFinite);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 75;
+    };
+    const creation = (attributeAverage('HAN') + attributeAverage('PAS')) / 2;
+    const spacing = (attributeAverage('threePT') + attributeAverage('MID')) / 2;
+    const defense = (attributeAverage('PDEF') + attributeAverage('IDEF') + attributeAverage('BLK')) / 3;
+    const fitBonus = Math.max(0, creation - 82) * 0.025 + Math.max(0, spacing - 82) * 0.018 + Math.max(0, defense - 82) * 0.022;
     const weakRotationPenalty = rotation.length < 7 ? (7 - rotation.length) * 0.8 : 0;
-    return Math.round((rotationStrength + starBonus - weakRotationPenalty) * 10) / 10;
+    return Math.round((rotationStrength + starBonus + fitBonus - weakRotationPenalty) * 10) / 10;
   }
 
   function bestOfSevenWinProbability(gameWinProbability) {
@@ -246,7 +271,11 @@
     return Math.round((base + upside - decline) * (0.55 + availability * 0.45) * 10) / 10;
   }
 
-  function calculateStatProfile({ attrs = {}, position = 'SF', minutes = 34, usage = 25, ovr = 80 } = {}) {
+  function eliteTail(value, threshold = 90) {
+    return Math.pow(clamp(((Number(value) || 40) - threshold) / Math.max(1, 99 - threshold), 0, 1), 1.45);
+  }
+
+  function calculateStatProfile({ attrs = {}, position = 'SF', minutes = 34, usage = 25, ovr = 80, role = '', pace = 1 } = {}) {
     const base = {
       PG: { fga: 17, reb: 4, ast: 9, stl: 1.5, blk: 0.3, tov: 2.8 },
       SG: { fga: 19, reb: 5, ast: 5, stl: 1.2, blk: 0.4, tov: 2.3 },
@@ -257,6 +286,7 @@
     const value = key => clamp(Number(attrs[key]) || 40, 40, 99);
     const minuteScale = clamp(minutes, 0, 48) / 34;
     const usageScale = clamp(usage / 25, 0.48, 1.48);
+    const shotUsageScale = clamp(0.52 + usageScale * 0.35, 0.7, 1.08);
     const scoringSkill = value('threePT') * 0.22 + value('MID') * 0.18 + value('FIN') * 0.23
       + value('DNK') * 0.12 + value('HAN') * 0.17 + value('ATH') * 0.08;
     const reboundingSkill = value('REB') * 0.62 + value('STR') * 0.2 + value('ATH') * 0.18;
@@ -264,17 +294,109 @@
     const stealSkill = value('PDEF') * 0.72 + value('ATH') * 0.2 + value('HAN') * 0.08;
     const blockSkill = value('BLK') * 0.64 + value('IDEF') * 0.24 + value('ATH') * 0.12;
     const ballSecurity = value('HAN') * 0.62 + value('PAS') * 0.3 + value('CLU') * 0.08;
-    const ovrStability = clamp(0.94 + (clamp(ovr, 40, 99) - 80) * 0.003, 0.82, 1.06);
+    const ovrStability = clamp(0.96 + (clamp(ovr, 40, 99) - 80) * 0.0022, 0.86, 1.045);
+    const paceScale = clamp(Number(pace) || 1, 0.86, 1.12);
+    const scoringNorm = clamp((scoringSkill - 40) / 59, 0, 1);
+    const reboundingNorm = clamp((reboundingSkill - 40) / 59, 0, 1);
+    const playmakingNorm = clamp((playmakingSkill - 40) / 59, 0, 1);
+    const roleModifiers = {
+      creator: { fga: 1.02, ast: 1.14, reb: 1 },
+      pointbig: { fga: 0.98, ast: 1.2, reb: 1.1 },
+      sniper: { fga: 1.08, ast: 0.92, reb: 0.96 },
+      slasher: { fga: 1.06, ast: 0.98, reb: 1.02 },
+      wing: { fga: 1, ast: 1, reb: 1.04 },
+      twoway: { fga: 0.97, ast: 0.98, reb: 1.04 },
+      anchor: { fga: 0.9, ast: 0.9, reb: 1.12 },
+      big: { fga: 0.96, ast: 0.92, reb: 1.12 }
+    }[role] || { fga: 1, ast: 1, reb: 1 };
+    const rebEliteBonus = eliteTail(reboundingSkill, 85) * ({ PG: 3.5, SG: 3.8, SF: 4.5, PF: 4, C: 3.2 }[position] || 4);
+    const astEliteBonus = eliteTail(playmakingSkill) * ({ PG: 3.5, SG: 5, SF: 6, PF: 6, C: 6 }[position] || 5);
+    const usageOpportunity = 0.76 + usageScale * 0.24;
     return {
-      fga: base.fga * minuteScale * usageScale * clamp(0.62 + scoringSkill / 185, 0.78, 1.16) * ovrStability,
-      reb: base.reb * minuteScale * clamp(0.42 + reboundingSkill / 120, 0.72, 1.25) * ovrStability,
-      ast: base.ast * minuteScale * (0.72 + usageScale * 0.28) * clamp(0.36 + playmakingSkill / 105, 0.68, 1.3) * ovrStability,
-      stl: base.stl * minuteScale * clamp(0.38 + stealSkill / 108, 0.68, 1.28),
-      blk: base.blk * minuteScale * clamp(0.34 + blockSkill / 105, 0.65, 1.28),
+      fga: base.fga * minuteScale * shotUsageScale * (0.74 + scoringNorm * 0.34 + eliteTail(scoringSkill) * 0.12) * ovrStability * paceScale * roleModifiers.fga,
+      reb: (base.reb * (0.74 + reboundingNorm * 0.26) + rebEliteBonus) * minuteScale * ovrStability * paceScale * roleModifiers.reb,
+      ast: Math.min(13.8, (base.ast * (0.7 + playmakingNorm * 0.3) + astEliteBonus) * minuteScale * usageOpportunity * ovrStability * paceScale * roleModifiers.ast),
+      stl: base.stl * minuteScale * (0.72 + clamp((stealSkill - 40) / 59, 0, 1) * 0.3 + eliteTail(stealSkill) * 0.14),
+      blk: base.blk * minuteScale * (0.7 + clamp((blockSkill - 40) / 59, 0, 1) * 0.32 + eliteTail(blockSkill) * 0.16),
       tov: base.tov * minuteScale * usageScale * clamp(1.42 - ballSecurity / 160, 0.76, 1.12),
       minuteScale,
-      usageScale
+      usageScale,
+      shotUsageScale,
+      paceScale
     };
+  }
+
+  function historicalAttributeCeiling({ key, current = 40, focus = false, official99 = false, seasons = [], awards = [] } = {}) {
+    if (official99 || current >= 99) return { ceiling: 99, level: '时代标志', unlocked: true };
+    if (!focus) return { ceiling: 95, level: '非专项上限', unlocked: current <= 95 };
+    const recent = (Array.isArray(seasons) ? seasons : []).slice(-3);
+    const values = recent.map(season => {
+      const averages = season.averages || season;
+      if (key === 'threePT') return Number(averages.threePct) >= 40.5 && Number(season.tpaPerGame ?? averages.tpa) >= 7.5;
+      if (key === 'PAS') return Number(averages.ast) >= 10.5 && Number(averages.tov ?? 99) <= 4.2;
+      if (key === 'REB') return Number(averages.reb) >= 12.5;
+      if (['PDEF', 'IDEF', 'BLK'].includes(key)) return Number(averages.stl || 0) + Number(averages.blk || 0) >= 2.8;
+      if (['FIN', 'DNK', 'MID', 'HAN'].includes(key)) return Number(averages.pts) >= 30.5;
+      if (key === 'CLU') return Number(averages.pts) >= 27 && Boolean(season.champion || season.mvp);
+      if (['ATH', 'STR'].includes(key)) return Number(season.ovr || 0) >= 95 && Number(season.age || 99) <= 28;
+      return false;
+    });
+    const qualifying = values.filter(Boolean).length;
+    const majorAward = (Array.isArray(awards) ? awards : []).some(label => ['最有价值球员', '最佳防守球员', '常规赛得分王'].includes(label));
+    if (qualifying >= 3 && majorAward) return { ceiling: 99, level: '时代标志', unlocked: true };
+    if (qualifying >= 2) return { ceiling: 98, level: '历史级候选', unlocked: true };
+    return { ceiling: 97, level: '联盟顶级', unlocked: current <= 97, qualifyingSeasons: qualifying };
+  }
+
+  function calculateMvpScore(player) {
+    const wins = Number(player?.wins) || 0;
+    const games = Math.max(1, Number(player?.games) || 0);
+    const availability = clamp(games / 82, 0, 1);
+    const pts = Number(player?.pts) || 0;
+    const reb = Number(player?.reb) || 0;
+    const ast = Number(player?.ast) || 0;
+    const tov = Number(player?.tov) || 0;
+    const trueShooting = Number(player?.trueShooting ?? player?.ts) || 57;
+    const production = pts * 0.72 + reb * 0.22 + ast * 0.34 - tov * 0.2;
+    const efficiency = clamp((trueShooting - 52) * 0.28, -2, 4);
+    const teamSuccess = wins >= 55 ? 12 + (wins - 55) * 0.32
+      : (wins >= 50 ? 8 + (wins - 50) * 0.8
+        : (wins >= 42 ? (wins - 42) * 0.5 : -(42 - wins) * 0.75));
+    const ratingStability = Math.max(0, (Number(player?.ovr) || 75) - 80) * 0.12;
+    const availabilityScore = (availability - 0.79) * 8;
+    const belowFiveHundredPenalty = wins < 41 && pts < 34 ? 7 + (41 - wins) * 0.4 : 0;
+    const total = production + efficiency + teamSuccess + ratingStability + availabilityScore - belowFiveHundredPenalty;
+    return {
+      total: Math.round(total * 100) / 100,
+      production: Math.round(production * 100) / 100,
+      efficiency: Math.round(efficiency * 100) / 100,
+      teamSuccess: Math.round(teamSuccess * 100) / 100,
+      availability: Math.round(availabilityScore * 100) / 100,
+      ratingStability: Math.round(ratingStability * 100) / 100,
+      belowFiveHundredPenalty
+    };
+  }
+
+  function calculateMotherTeamRetention(profile = {}) {
+    const tenure = Math.max(0, Number(profile.tenure) || 0);
+    const relationship = clamp(Number(profile.relationship) || 50, 0, 100);
+    const legacyScore = Math.max(0, Number(profile.legacyScore) || 0);
+    const championships = Math.max(0, Number(profile.championships) || 0);
+    const tradeRequests = Math.max(0, Number(profile.tradeRequests) || 0);
+    const forcedRetirement = Boolean(profile.forcedRetirement);
+    const reasons = [];
+    let probability = 0.18 + relationship * 0.004 + Math.min(0.28, tenure * 0.025) + Math.min(0.22, legacyScore * 0.0012) + Math.min(0.12, championships * 0.04);
+    if (tenure >= 8) reasons.push('长期效力本队');
+    if (tenure >= 12) reasons.push('一人一城功勋');
+    if (legacyScore >= 85) reasons.push('队史代表球员');
+    if (legacyScore >= 150) reasons.push('队史第一人级贡献');
+    if (championships) reasons.push('冠军功勋');
+    probability -= Math.min(0.42, tradeRequests * 0.14);
+    if (relationship < 35) probability -= (35 - relationship) * 0.012;
+    if (forcedRetirement) probability = 0;
+    const guaranteed = !forcedRetirement && relationship >= 70 && (tenure >= 12 || legacyScore >= 150);
+    if (guaranteed) probability = Math.max(probability, legacyScore >= 150 ? 0.98 : 0.92);
+    return { probability: Math.round(clamp(probability, 0, 0.99) * 1000) / 1000, guaranteed, reasons };
   }
 
   function calculateCareerLegacy(career) {
@@ -348,6 +470,71 @@
     return { score, rawScore, dimensions, tier, productionRatings, qualityUnits, careerPpg, careerMpg, seasonCount, totalGames };
   }
 
+  function calculateCareerTitles(career, legacy = calculateCareerLegacy(career)) {
+    const history = Array.isArray(career?.history) ? career.history : [];
+    const awards = career?.awardCounts || {};
+    const totals = career?.totals || {};
+    const teamsPlayed = Array.isArray(career?.teamsPlayed) ? career.teamsPlayed : [];
+    const mvp = awards['最有价值球员'] || 0;
+    const allNba = awards['最佳阵容'] || 0;
+    const championships = career?.championships || 0;
+    const deepRuns = history.filter(season => season.champion || /总决赛|分区决赛/.test(String(season.postseason))).length;
+    const latePrime = history.filter(season => season.age >= 33 && season.ovr >= 85 && season.games >= 58).length;
+    const definitions = [
+      {
+        title: '联盟门面',
+        achieved: mvp >= 2 && allNba >= 8 && (career?.peakOVR || 0) >= 95,
+        reason: `${mvp} 次 MVP、${allNba} 次最佳阵容，巅峰 ${career?.peakOVR || 0} OVR`,
+        requirement: '至少2次MVP、8次最佳阵容且巅峰达到95 OVR'
+      },
+      {
+        title: '冠军核心',
+        achieved: championships >= 1 && ((career?.peakOVR || 0) >= 88 || allNba >= 2),
+        reason: `${championships} 次夺冠，巅峰 ${career?.peakOVR || 0} OVR`,
+        requirement: '以核心能力赢得至少1次总冠军'
+      },
+      {
+        title: '无冕之王',
+        achieved: championships === 0 && legacy.score >= 65 && (mvp >= 1 || allNba >= 7),
+        reason: `没有总冠军，但拥有 ${mvp} 次 MVP、${allNba} 次最佳阵容`,
+        requirement: '无冠且历史评分65以上，并有MVP或至少7次最佳阵容'
+      },
+      {
+        title: '常青树',
+        achieved: history.length >= 15 && (career?.totalGames || 0) >= 1000 && latePrime >= 2,
+        reason: `${history.length} 个赛季、${career?.totalGames || 0} 场，33岁后仍有 ${latePrime} 个高水平赛季`,
+        requirement: '至少15季、1000场，33岁后仍有2个高水平赛季'
+      },
+      {
+        title: '球队图腾',
+        achieved: teamsPlayed.length === 1 && history.length >= 10 && (career?.totalGames || 0) >= 650,
+        reason: `全部 ${history.length} 个赛季效力同一支球队`,
+        requirement: '只效力一队至少10季并出战650场'
+      },
+      {
+        title: '季后赛杀手',
+        achieved: deepRuns >= 3 && championships >= 1,
+        reason: `${deepRuns} 次打入分区决赛或更远，并赢得 ${championships} 冠`,
+        requirement: '至少3次深入季后赛并夺得总冠军'
+      },
+      {
+        title: '数据巨匠',
+        achieved: (totals.pts || 0) >= 30000 || (totals.reb || 0) >= 15000 || (totals.ast || 0) >= 10000,
+        reason: `累计 ${Math.round(totals.pts || 0)} 分、${Math.round(totals.reb || 0)} 篮板、${Math.round(totals.ast || 0)} 助攻`,
+        requirement: '达到30000分、15000篮板或10000助攻之一'
+      },
+      {
+        title: '辗转名将',
+        achieved: teamsPlayed.length >= 4 && legacy.score >= 45 && (allNba >= 2 || mvp >= 1),
+        reason: `效力 ${teamsPlayed.length} 支球队，仍累积 ${allNba} 次最佳阵容`,
+        requirement: '效力至少4队，并以明星级履历维持影响力'
+      }
+    ];
+    const achieved = definitions.filter(item => item.achieved);
+    const next = definitions.find(item => !item.achieved) || null;
+    return { achieved, next, definitions };
+  }
+
   function auditLeague(teams, players, records) {
     const active = players.filter(player => player.active && player.teamId);
     const ids = new Set();
@@ -382,7 +569,11 @@
     calculateTradeProbability,
     contractMarketValue,
     calculateStatProfile,
+    historicalAttributeCeiling,
+    calculateMvpScore,
+    calculateMotherTeamRetention,
     calculateCareerLegacy,
+    calculateCareerTitles,
     auditLeague
   };
 }));

@@ -370,7 +370,8 @@
     const overrides = getPlayerAttributeOverrides(name, effectiveEraKey);
     const positions = getPlayerPositions(name, listedPosition);
     const pos = positions[0];
-    const generatedCeiling = Math.min(99, calibratedOvr + 6);
+    // Generated ratings stop at 97. Only explicit, hand-audited player overrides may use 98/99.
+    const generatedCeiling = Math.min(97, calibratedOvr + 6);
     const attrs = {};
     ATTRS.forEach(([key], index) => {
       if (key === 'POT') {

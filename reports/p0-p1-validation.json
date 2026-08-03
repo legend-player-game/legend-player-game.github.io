@@ -1,0 +1,92 @@
+{
+  "generatedAt": "2026-08-03T07:31:12.488Z",
+  "seed": "0x5eed2026",
+  "samples": {
+    "eachPlayoffMatchup": 100000,
+    "mvpCases": 10000
+  },
+  "playoffUpsetPercent": {
+    "1v8": 9.9,
+    "2v7": 18.17,
+    "3v6": 30.47,
+    "4v5": 42.85
+  },
+  "mvpBetterRecordWinnerPercent": 100,
+  "statProfiles": {
+    "eliteCreator": {
+      "fga": 21.58181548177379,
+      "reb": 5.541943898090225,
+      "ast": 13.8,
+      "stl": 1.5114616151545364,
+      "blk": 0.26390763708873377,
+      "tov": 3.232656,
+      "minuteScale": 1.0588235294117647,
+      "usageScale": 1.36,
+      "shotUsageScale": 0.996,
+      "paceScale": 1.04
+    },
+    "allStarCreator": {
+      "fga": 18.16216533242359,
+      "reb": 4.172177211923145,
+      "ast": 11.120013394069566,
+      "stl": 1.5056470588235296,
+      "blk": 0.26390763708873377,
+      "tov": 3.050682352941176,
+      "minuteScale": 1.0588235294117647,
+      "usageScale": 1.2,
+      "shotUsageScale": 0.94,
+      "paceScale": 1.04
+    },
+    "elitePointBig": {
+      "fga": 16.116157704945515,
+      "reb": 15.324300970394185,
+      "ast": 13.717122916921765,
+      "stl": 0.7053487537387836,
+      "blk": 1.4075073978065804,
+      "tov": 2.0373882352941175,
+      "minuteScale": 1.0588235294117647,
+      "usageScale": 1.2,
+      "shotUsageScale": 0.94,
+      "paceScale": 1.04
+    }
+  },
+  "retention": {
+    "twelveYearVeteran": {
+      "probability": 0.938,
+      "guaranteed": true,
+      "reasons": [
+        "长期效力本队",
+        "一人一城功勋",
+        "队史代表球员",
+        "冠军功勋"
+      ]
+    },
+    "franchiseIcon": {
+      "probability": 0.99,
+      "guaranteed": true,
+      "reasons": [
+        "长期效力本队",
+        "一人一城功勋",
+        "队史代表球员",
+        "队史第一人级贡献",
+        "冠军功勋"
+      ]
+    },
+    "estrangedVeteran": {
+      "probability": 0.176,
+      "guaranteed": false,
+      "reasons": [
+        "长期效力本队",
+        "一人一城功勋",
+        "队史代表球员"
+      ]
+    }
+  },
+  "playoffPass": {
+    "1v8": true,
+    "2v7": true,
+    "3v6": true,
+    "4v5": true
+  },
+  "pass": true
+}

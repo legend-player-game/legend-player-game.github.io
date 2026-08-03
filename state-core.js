@@ -39,6 +39,37 @@
     return save;
   }
 
+  function compactLeaguePlayer(player) {
+    const compact = { ...player };
+    if (Array.isArray(compact.seasonHistory)) compact.seasonHistory = compact.seasonHistory.slice(-8);
+    if (Array.isArray(compact.injuryHistory)) compact.injuryHistory = compact.injuryHistory.slice(-6);
+    delete compact.ageSource;
+    delete compact.sourceOvr;
+    delete compact.projected;
+    return compact;
+  }
+
+  function compactSave(save) {
+    if (!save || typeof save !== 'object') return save;
+    delete save.lastSaveStatus;
+    if (save.career) {
+      save.candidatePlayers = [];
+      save.seenCandidatePlayers = [];
+      save.selectedPlayer = null;
+      const league = save.career.league;
+      if (league && Array.isArray(league.players)) {
+        league.players = league.players
+          .filter(player => player?.active || player?.isUser)
+          .map(compactLeaguePlayer);
+        if (Array.isArray(league.transactionHistory)) league.transactionHistory = league.transactionHistory.slice(-120);
+        if (Array.isArray(league.awardHistory)) league.awardHistory = league.awardHistory.slice(-24);
+      }
+      if (Array.isArray(save.career.recentDepartures)) save.career.recentDepartures = save.career.recentDepartures.slice(-8);
+      if (Array.isArray(save.career.tradeCounterpartIds)) save.career.tradeCounterpartIds = save.career.tradeCounterpartIds.slice(-20);
+    }
+    return save;
+  }
+
   function migrateSave(rawSave, targetVersion) {
     if (!rawSave || typeof rawSave !== 'object') return null;
     const save = clone(rawSave);
@@ -54,7 +85,7 @@
   }
 
   function createSaveSnapshot(state, targetVersion, savedAt) {
-    const snapshot = migrateSave(state, targetVersion);
+    const snapshot = compactSave(migrateSave(state, targetVersion));
     if (!snapshot) return null;
     snapshot.savedAt = savedAt || new Date().toISOString();
     snapshot.selectedPlayer = state.selectedPlayer
@@ -103,14 +134,22 @@
     return list;
   }
 
+  function serializedBytes(value) {
+    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(serialized).length;
+    return unescape(encodeURIComponent(serialized)).length;
+  }
+
   return {
     canTransitionSeason,
+    compactSave,
     createSaveSnapshot,
     hasMeaningfulProgress,
     migrateSave,
     normalizePlayerRating,
     parseSave,
     selectStoredSave,
+    serializedBytes,
     upsertSeasonRecord
   };
 }));

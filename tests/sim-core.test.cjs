@@ -94,6 +94,15 @@ test('equal playoff teams remain a coin flip over seven games', () => {
   assert.ok(Math.abs(SIM.bestOfSevenWinProbability(gameChance) - 0.5) < 0.0001);
 });
 
+test('first seed receives a bounded postseason prior over an equal eighth seed', () => {
+  const gameChance = SIM.seriesWinProbability(84, 84, 0, {
+    ownSeed: 1, opponentSeed: 8, ownWins: 56, opponentWins: 43
+  });
+  const seriesChance = SIM.bestOfSevenWinProbability(gameChance);
+  assert.ok(seriesChance > 0.78);
+  assert.ok(seriesChance < 0.95);
+});
+
 test('trade value rewards youth and penalizes aging contracts', () => {
   const young = SIM.tradeValue({ ovr: 86, age: 22, potential: 92, contractYears: 4 });
   const veteran = SIM.tradeValue({ ovr: 86, age: 35, potential: 70, contractYears: 3 });
@@ -160,6 +169,56 @@ test('overall is only a secondary stat stabilizer', () => {
   const high = SIM.calculateStatProfile({ attrs, position: 'PG', minutes: 34, usage: 25, ovr: 95 });
   assert.ok(high.ast > low.ast);
   assert.ok(high.ast < low.ast * 1.1);
+});
+
+test('elite tail makes 99 meaningfully stronger than 97 in the matching role', () => {
+  const baseAttrs = Object.fromEntries(['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'].map(key => [key, 84]));
+  const elite = SIM.calculateStatProfile({ attrs: { ...baseAttrs, PAS: 99, HAN: 99 }, position: 'SF', role: 'creator', minutes: 36, usage: 31, ovr: 94, pace: 1.04 });
+  const nearElite = SIM.calculateStatProfile({ attrs: { ...baseAttrs, PAS: 97, HAN: 97 }, position: 'SF', role: 'creator', minutes: 36, usage: 31, ovr: 94, pace: 1.04 });
+  assert.ok(elite.ast > nearElite.ast * 1.08);
+});
+
+test('modern elite usage produces high but bounded shot volume', () => {
+  const attrs = Object.fromEntries(['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'].map(key => [key, 97]));
+  attrs.threePT = 99;
+  attrs.HAN = 99;
+  const profile = SIM.calculateStatProfile({ attrs, position: 'PG', minutes: 36, usage: 34, ovr: 97, role: 'creator', pace: 1.04 });
+  assert.ok(profile.fga >= 20 && profile.fga <= 25, `unexpected elite shot volume: ${profile.fga}`);
+});
+
+test('point big with generational passing and rebounding can approach a triple-double', () => {
+  const attrs = Object.fromEntries(['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'].map(key => [key, 92]));
+  attrs.PAS = 99;
+  attrs.HAN = 99;
+  attrs.REB = 99;
+  attrs.STR = 99;
+  const profile = SIM.calculateStatProfile({ attrs, position: 'PF', role: 'pointbig', minutes: 37, usage: 30, ovr: 97, pace: 1.04 });
+  assert.ok(profile.ast >= 10);
+  assert.ok(profile.reb >= 10);
+});
+
+test('historical attributes stop at 97 without sustained qualifying seasons', () => {
+  const locked = SIM.historicalAttributeCeiling({ key: 'threePT', current: 97, focus: true, seasons: [{ threePct: 39, tpa: 7 }] });
+  const unlocked = SIM.historicalAttributeCeiling({
+    key: 'threePT', current: 97, focus: true,
+    seasons: [{ threePct: 42, tpa: 9 }, { threePct: 41, tpa: 8.5 }]
+  });
+  assert.equal(locked.ceiling, 97);
+  assert.equal(unlocked.ceiling, 98);
+});
+
+test('MVP score favors a 52-win core over a slightly better 38-win stat line', () => {
+  const winner = SIM.calculateMvpScore({ ovr: 94, pts: 26.7, reb: 4.3, ast: 10.7, tov: 2, wins: 52, games: 82, trueShooting: 63 });
+  const loser = SIM.calculateMvpScore({ ovr: 95, pts: 28, reb: 4.8, ast: 11.1, tov: 3, wins: 38, games: 82, trueShooting: 61 });
+  assert.ok(winner.total > loser.total + 3);
+});
+
+test('franchise icon retention survives late-career market decline', () => {
+  const icon = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 90, legacyScore: 210, championships: 2, tradeRequests: 0 });
+  const estranged = SIM.calculateMotherTeamRetention({ tenure: 18, relationship: 25, legacyScore: 80, championships: 0, tradeRequests: 3 });
+  assert.equal(icon.guaranteed, true);
+  assert.ok(icon.probability >= 0.98);
+  assert.ok(estranged.probability < 0.6);
 });
 
 function careerFixture(overrides = {}) {
@@ -258,4 +317,46 @@ test('top 25 historical careers stay in the formal commentary group', () => {
   });
   assert.equal(legacy.tier.top30, true);
   assert.match(legacy.tier.rank, /历史前 (3|10|25)/);
+});
+
+test('career titles expose achieved evidence and the next unmet condition', () => {
+  const history = Array.from({ length: 16 }, (_, index) => ({
+    seasonNumber: index + 1,
+    age: 18 + index,
+    ovr: index < 13 ? 96 : 88,
+    games: 78,
+    champion: index < 2,
+    postseason: index < 2 ? '总冠军' : (index < 5 ? '分区决赛止步' : '首轮止步')
+  }));
+  const career = careerFixture({
+    history,
+    totals: { pts: 32000, reb: 8200, ast: 7600 },
+    awardCounts: { '最有价值球员': 2, '最佳阵容': 11 },
+    championships: 2,
+    peakOVR: 98,
+    totalGames: 1248,
+    teamsPlayed: ['BOS']
+  });
+  const titles = SIM.calculateCareerTitles(career);
+  const names = titles.achieved.map(item => item.title);
+  assert.ok(names.includes('联盟门面'));
+  assert.ok(names.includes('冠军核心'));
+  assert.ok(names.includes('球队图腾'));
+  assert.ok(names.includes('数据巨匠'));
+  assert.equal(typeof titles.achieved[0].reason, 'string');
+  assert.equal(typeof titles.next.requirement, 'string');
+});
+
+test('career title conditions do not award empty prestige labels', () => {
+  const titles = SIM.calculateCareerTitles(careerFixture({
+    history: Array.from({ length: 4 }, (_, index) => ({ seasonNumber: index + 1, age: 18 + index, ovr: 68, games: 40 })),
+    totals: { pts: 800, reb: 300, ast: 180 },
+    awardCounts: {},
+    championships: 0,
+    peakOVR: 70,
+    totalGames: 160,
+    teamsPlayed: ['WAS', 'DET']
+  }));
+  assert.equal(titles.achieved.length, 0);
+  assert.equal(titles.next.title, '联盟门面');
 });
