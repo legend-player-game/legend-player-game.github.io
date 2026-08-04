@@ -371,6 +371,7 @@
     const directionMismatch = clamp(Number(profile?.directionMismatch) || 0, 0, 14);
     const relationship = clamp(Number(profile?.relationship) || 50, 0, 100);
     const seasonsSinceMove = Math.max(0, Number(profile?.seasonsSinceMove) || 99);
+    const tradeDemandPressure = clamp(Number(profile?.tradeDemandPressure) || 0, 0, 0.4);
     const protections = [];
     const risks = [];
     let chance = 0.085;
@@ -432,15 +433,67 @@
       chance += (40 - relationship) * 0.003;
       risks.push('与管理层关系紧张');
     }
+    if (tradeDemandPressure > 0) {
+      chance += tradeDemandPressure;
+      risks.push(tradeDemandPressure >= 0.25 ? '公开离队矛盾' : '仍有离队意愿');
+    }
     if (ovr < 76 && age >= 28) {
       chance += Math.min(0.08, (76 - ovr) * 0.012);
       risks.push('轮换价值下降');
     }
 
     return {
-      chance: Math.round(clamp(chance, 0.01, 0.45) * 1000) / 1000,
+      chance: Math.round(clamp(chance, 0.01, tradeDemandPressure > 0 ? 0.72 : 0.45) * 1000) / 1000,
       protections: [...new Set(protections)],
       risks: [...new Set(risks)]
+    };
+  }
+
+  function calculateTradeRequestApproval(profile = {}) {
+    const ovr = Number(profile.ovr) || 75;
+    const contractYears = clamp(Number(profile.contractYears) || 1, 1, 5);
+    const teamWins = Number(profile.teamWins) || 41;
+    const failures = Math.max(0, Number(profile.failures) || 0);
+    const relationship = clamp(Number(profile.relationship) || 50, 0, 100);
+    const candidateQuality = clamp(Number(profile.candidateQuality) || 0, -10, 20);
+    const hardline = Boolean(profile.hardline);
+    const contractFactor = contractYears <= 1 ? 0.18 : (contractYears === 2 ? 0.08 : (contractYears >= 4 ? -0.08 : 0));
+    let probability = 0.34 + (ovr - 80) * 0.018 + contractFactor
+      - Math.max(0, teamWins - 45) * 0.004 - failures * 0.035
+      + (50 - relationship) * 0.0015 + candidateQuality * 0.006;
+    if (hardline) probability += 0.18;
+    return Math.round(clamp(probability, hardline ? 0.3 : 0.18, hardline ? 0.9 : 0.82) * 1000) / 1000;
+  }
+
+  function calculateDevelopmentProfile(profile = {}) {
+    const potential = clamp(Number(profile.potential) || 70, 40, 99);
+    const age = Math.max(18, Number(profile.age) || 24);
+    const minutes = clamp(Number(profile.minutes) || 0, 0, 48);
+    const usage = clamp(Number(profile.usage) || 0, 0, 50);
+    const games = clamp(Number(profile.games) || 0, 0, 82);
+    const potentialFactor = clamp((potential - 40) / 59, 0, 1);
+    const ageFactor = age <= 21 ? 1 : (age <= 24 ? 0.82 : (age <= 27 ? 0.55 : (age <= 30 ? 0.25 : 0)));
+    const baseChance = clamp((0.12 + potentialFactor * 0.75) * ageFactor, 0, 0.9);
+    const minutesFactor = clamp((minutes - 8) / 24, 0, 1);
+    const usageEligible = minutes >= 12 && games >= 40;
+    const usageFactor = usageEligible ? clamp((usage - 14) / 18, 0, 1) : 0;
+    const availabilityFactor = clamp(games / 70, 0, 1);
+    const opportunity = availabilityFactor * (minutesFactor * 0.7 + usageFactor * 0.3);
+    const chanceMultiplier = 0.55 + opportunity * 0.65;
+    const magnitudeMultiplier = 0.75 + opportunity * 0.4;
+    const chance = age <= 30 ? clamp(baseChance * chanceMultiplier, 0, 0.92) : 0;
+    const level = opportunity >= 0.8 ? '优秀' : (opportunity >= 0.58 ? '充足' : (opportunity >= 0.32 ? '一般' : '有限'));
+    return {
+      chance: Math.round(chance * 1000) / 1000,
+      baseChance: Math.round(baseChance * 1000) / 1000,
+      opportunity: Math.round(opportunity * 1000) / 1000,
+      chanceMultiplier: Math.round(chanceMultiplier * 1000) / 1000,
+      magnitudeMultiplier: Math.round(magnitudeMultiplier * 1000) / 1000,
+      minutesFactor: Math.round(minutesFactor * 1000) / 1000,
+      usageFactor: Math.round(usageFactor * 1000) / 1000,
+      availabilityFactor: Math.round(availabilityFactor * 1000) / 1000,
+      level,
+      usageEligible
     };
   }
 
@@ -958,6 +1011,8 @@
     bestOfSevenWinProbability,
     tradeValue,
     calculateTradeProbability,
+    calculateTradeRequestApproval,
+    calculateDevelopmentProfile,
     contractMarketValue,
     calculateStatProfile,
     historicalAttributeCeiling,

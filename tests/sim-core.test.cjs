@@ -156,6 +156,53 @@ test('journeyman history and roster mismatch increase trade probability', () => 
   assert.ok(journeyman.risks.includes('近期流动频繁'));
 });
 
+test('trade demand pressure materially raises future involuntary trade risk', () => {
+  const stable = SIM.calculateTradeProbability({
+    age: 28, ovr: 86, potential: 80, contractYears: 2, teamTenure: 5,
+    teamsPlayed: 1, recentMoves: 0, franchiseScore: 60, teamWins: 44,
+    relationship: 60, seasonsSinceMove: 5, tradeDemandPressure: 0
+  });
+  const softened = SIM.calculateTradeProbability({
+    age: 28, ovr: 86, potential: 80, contractYears: 2, teamTenure: 5,
+    teamsPlayed: 1, recentMoves: 0, franchiseScore: 60, teamWins: 44,
+    relationship: 50, seasonsSinceMove: 5, tradeDemandPressure: 0.1
+  });
+  const hardline = SIM.calculateTradeProbability({
+    age: 28, ovr: 86, potential: 80, contractYears: 2, teamTenure: 5,
+    teamsPlayed: 1, recentMoves: 0, franchiseScore: 60, teamWins: 44,
+    relationship: 5, seasonsSinceMove: 5, tradeDemandPressure: 0.3
+  });
+  assert.ok(softened.chance >= stable.chance + 0.09);
+  assert.ok(hardline.chance >= softened.chance + 0.2);
+  assert.ok(hardline.risks.includes('公开离队矛盾'));
+});
+
+test('hardline trade request has more leverage but remains bounded', () => {
+  const profile = { ovr: 88, contractYears: 3, teamWins: 50, failures: 1, relationship: 45, candidateQuality: 8 };
+  const initial = SIM.calculateTradeRequestApproval(profile);
+  const hardline = SIM.calculateTradeRequestApproval({ ...profile, hardline: true });
+  assert.ok(hardline > initial);
+  assert.ok(hardline <= 0.9);
+  assert.ok(initial >= 0.18);
+});
+
+test('development opportunity rewards real minutes usage and availability', () => {
+  const reserve = SIM.calculateDevelopmentProfile({ potential: 90, age: 22, minutes: 8, usage: 18, games: 55 });
+  const rotation = SIM.calculateDevelopmentProfile({ potential: 90, age: 22, minutes: 24, usage: 23, games: 70 });
+  const core = SIM.calculateDevelopmentProfile({ potential: 90, age: 22, minutes: 35, usage: 31, games: 78 });
+  assert.ok(rotation.chance > reserve.chance);
+  assert.ok(core.chance > rotation.chance);
+  assert.ok(core.magnitudeMultiplier > rotation.magnitudeMultiplier);
+  assert.equal(reserve.usageEligible, false);
+});
+
+test('small-sample usage cannot unlock growth and age decline remains independent', () => {
+  const smallSample = SIM.calculateDevelopmentProfile({ potential: 99, age: 21, minutes: 10, usage: 40, games: 20 });
+  const veteran = SIM.calculateDevelopmentProfile({ potential: 99, age: 33, minutes: 38, usage: 35, games: 82 });
+  assert.equal(smallSample.usageFactor, 0);
+  assert.equal(veteran.chance, 0);
+});
+
 test('contract market value can fall below the offer threshold', () => {
   const star = SIM.contractMarketValue({ ovr: 91, age: 27, potential: 82, availability: 0.95 });
   const decliningReserve = SIM.contractMarketValue({ ovr: 68, age: 36, potential: 60, availability: 0.45 });

@@ -2027,6 +2027,28 @@ button.attribute-slot:not(:disabled):hover {
   font-size: 12px;
 }
 
+.development-drivers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 248, 0.72);
+}
+
+.development-drivers > div {
+  min-width: 0;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.development-drivers > div:nth-child(3n) { border-right: 0; }
+.development-drivers > div:nth-last-child(-n+3) { border-bottom: 0; }
+.development-drivers span,
+.development-drivers b { display: block; }
+.development-drivers span { color: var(--muted); font-size: 9px; }
+.development-drivers b { margin-top: 3px; font-size: 12px; }
+
 .development-attributes {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2253,6 +2275,30 @@ button.attribute-slot:not(:disabled):hover {
 .movement-protection {
   margin: 0 0 14px;
 }
+
+.trade-negotiation-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trade-negotiation-options article {
+  display: grid;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: var(--white);
+}
+
+.trade-negotiation-options article.is-hardline { border-color: #b63b32; }
+.trade-negotiation-options p {
+  min-height: 54px;
+  margin: 6px 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.trade-negotiation-options button { width: 100%; align-self: end; }
 
 .modal-kicker {
   display: block;
@@ -3497,6 +3543,20 @@ button.attribute-slot:not(:disabled):hover {
   .development-summary {
     grid-template-columns: 1fr;
   }
+
+  .development-drivers,
+  .trade-negotiation-options {
+    grid-template-columns: 1fr;
+  }
+
+  .development-drivers > div,
+  .development-drivers > div:nth-child(3n),
+  .development-drivers > div:nth-last-child(-n+3) {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .development-drivers > div:last-child { border-bottom: 0; }
 
   .development-summary > div {
     border-right: 0;
