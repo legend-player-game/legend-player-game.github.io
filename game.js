@@ -17,6 +17,7 @@
   const LEGACY_SAVE_KEYS = ['build-a-player-save-v6', 'build-a-player-save-v5', 'build-a-player-save-v4', 'build-a-player-save-v3'];
   const SAVE_SCHEMA_VERSION = 7;
   const HONOR_KEY = 'build-a-player-honors-v1';
+  const UPDATE_ANNOUNCEMENT_KEY = 'build-a-player-update-20260804-01';
   const CAREER_SEASONS = 20;
   const CAREER_START_AGE = 18;
   const POSITION_ARCHETYPES = {
@@ -4369,6 +4370,40 @@
     modalRoot.replaceChildren();
   }
 
+  function hasSeenUpdateAnnouncement() {
+    try {
+      return localStorage.getItem(UPDATE_ANNOUNCEMENT_KEY) === 'seen';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function dismissUpdateAnnouncement() {
+    try {
+      localStorage.setItem(UPDATE_ANNOUNCEMENT_KEY, 'seen');
+    } catch (error) {
+      // Storage-disabled browsers can still dismiss the announcement for this page view.
+    }
+    closeModal();
+  }
+
+  function showUpdateAnnouncement() {
+    if (hasSeenUpdateAnnouncement() || modalRoot.childElementCount) return;
+    modalRoot.innerHTML = `
+      <section class="modal update-announcement-modal" data-update-announcement role="dialog" aria-modal="true" aria-labelledby="update-announcement-title">
+        <header class="modal-head"><div><span class="modal-kicker">AUG 04 · GAME UPDATE</span><h2 id="update-announcement-title">今日更新</h2></div><button class="modal-close" type="button" data-action="dismiss-update-announcement" aria-label="关闭">×</button></header>
+        <div class="modal-body">
+          <p class="update-announcement-lead">生涯中的选择与比赛机会，现在会带来更明确的长期影响。</p>
+          <ul class="update-announcement-list">
+            <li><b>请求交易深化</b><span>首次被拒后可暂时留队，或强硬施压再次申请；不同选择会影响上场时间、未来交易风险与母队续约。</span></li>
+            <li><b>交易匹配优化</b><span>原队优先换回阵容短板，新队允许位置重叠，但竞争会影响预计角色和时间。</span></li>
+            <li><b>成长逻辑升级</b><span>属性进步同时取决于潜力、上场时间、球权使用率和赛季出勤。</span></li>
+          </ul>
+          <button class="primary-btn" type="button" data-action="dismiss-update-announcement">进入游戏</button>
+        </div>
+      </section>`;
+  }
+
   function loadHonors() {
     try {
       return JSON.parse(localStorage.getItem(HONOR_KEY)) || {};
@@ -4635,6 +4670,7 @@
     if (action === 'continue') continueGame();
     if (action === 'reroll') rerollPlayers();
     if (action === 'close-modal') closeModal();
+    if (action === 'dismiss-update-announcement') dismissUpdateAnnouncement();
     if (action === 'confirm-lock') confirmLock(element.dataset.attribute);
     if (action === 'career') showScreen('career');
     if (action === 'restart') requestNewGame(state.eraKey || 'current');
@@ -4691,6 +4727,7 @@
     if (event.key === 'Escape' && modalRoot.childElementCount) {
       if (state.season?.tradeNegotiation) showTradeNegotiationModal(state.season.tradeNegotiation);
       else if (state.career?.pendingDevelopmentReview) confirmDevelopmentReview();
+      else if (modalRoot.querySelector('[data-update-announcement]')) dismissUpdateAnnouncement();
       else closeModal();
     }
   });
@@ -4819,4 +4856,5 @@
   } else {
     renderHome();
   }
+  showUpdateAnnouncement();
 }());

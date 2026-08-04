@@ -1913,6 +1913,41 @@ button.attribute-slot:not(:disabled):hover {
   padding: 18px;
 }
 
+.update-announcement-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.update-announcement-lead {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.update-announcement-list {
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.update-announcement-list li {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 14px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.update-announcement-list b { font-size: 12px; }
+.update-announcement-list span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.update-announcement-modal .primary-btn { width: 100%; }
+
 .movement-modal,
 .free-agency-modal,
 .development-modal {
@@ -3547,6 +3582,11 @@ button.attribute-slot:not(:disabled):hover {
   .development-drivers,
   .trade-negotiation-options {
     grid-template-columns: 1fr;
+  }
+
+  .update-announcement-list li {
+    grid-template-columns: 1fr;
+    gap: 5px;
   }
 
   .development-drivers > div,
