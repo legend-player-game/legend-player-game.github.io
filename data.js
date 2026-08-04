@@ -213,6 +213,8 @@
     }
   };
 
+  const ERA_ATTRIBUTE_OFFSETS = { '2003': 2, '2009': 3 };
+
   const POSITION_ATTRIBUTE_BASELINES = {
     PG: [78, 75, 70, 55, 85, 85, 70, 45, 40, 50, 80, 55, 75],
     SG: [80, 78, 75, 70, 80, 72, 75, 50, 45, 58, 82, 65, 75],
@@ -385,6 +387,7 @@
     const profile = ARCHETYPES[archetype];
     const hash = hashName(name);
     const effectiveEraKey = currentRoster ? 'current' : String(eraKey || 'current');
+    const eraAttributeOffset = ERA_ATTRIBUTE_OFFSETS[effectiveEraKey] || 0;
     const overrides = getPlayerAttributeOverrides(name, effectiveEraKey);
     const positions = getPlayerPositions(name, listedPosition);
     const pos = positions[0];
@@ -398,7 +401,7 @@
       }
       const jitter = ((hash >> (index % 16)) % 5) - 2;
       const roleValue = profile.values[index] * 0.68 + POSITION_ATTRIBUTE_BASELINES[pos][index] * 0.32;
-      attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (calibratedOvr - 85) * 0.85 + jitter)));
+      attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (calibratedOvr - 85) * 0.85 + jitter + eraAttributeOffset)));
     });
     Object.assign(attrs, overrides);
     const attributeOvr = Math.round(ATTRS.reduce((sum, [key], index) => (
@@ -429,6 +432,29 @@
 
   function calculateAttributeOverall(attrs, position) {
     return Math.round(ATTRS.reduce((sum, [key], index) => sum + (attrs[key] || 0) * POSITION_WEIGHTS[position][index], 0));
+  }
+
+  function enforceAttributeApex(playerGroups) {
+    const players = Array.isArray(playerGroups) ? playerGroups : Object.values(playerGroups || {}).flat();
+    ATTRS.filter(([key]) => key !== 'POT').forEach(([key]) => {
+      const ranked = players.filter(player => Number.isFinite(player?.[key]))
+        .sort((left, right) => right[key] - left[key] || right.ovr - left.ovr || left.name.localeCompare(right.name));
+      const carriers = ranked.filter(player => player[key] >= 99);
+      carriers.slice(2).forEach(player => { player[key] = 98; });
+      if (ranked.length && !ranked.some(player => player[key] >= 99)) ranked[0][key] = 99;
+    });
+    players.forEach(player => {
+      player.attributeOvr = calculateAttributeOverall(player, player.pos);
+    });
+    return players;
+  }
+
+  function auditAttributeApex(playerGroups) {
+    const players = Array.isArray(playerGroups) ? playerGroups : Object.values(playerGroups || {}).flat();
+    return Object.fromEntries(ATTRS.filter(([key]) => key !== 'POT').map(([key]) => [
+      key,
+      players.filter(player => player[key] === 99).map(player => player.name)
+    ]));
   }
 
   const ACTIVE_ROSTER_SEEDS = window.NBA_ROSTER_SEEDS || Object.fromEntries(
@@ -471,6 +497,7 @@
     activePlayers = key === 'current' ? CURRENT_PLAYERS : Object.fromEntries(
       era.teams.map(team => [team.id, (era.rosterSeeds[team.id] || []).map(seed => createPlayer(team.id, seed, false, String(key)))])
     );
+    enforceAttributeApex(activePlayers);
     window.GAME_DATA.TEAMS = activeTeams;
     window.GAME_DATA.PLAYERS = activePlayers;
     window.GAME_DATA.activeEra = activeEra;
@@ -518,6 +545,8 @@
     return { label: 'E', color: '#8a8780' };
   }
 
+  enforceAttributeApex(activePlayers);
+
   window.GAME_DATA = {
     ATTRS,
     ATTRIBUTE_IMPACTS,
@@ -533,6 +562,8 @@
     getDraftClass,
     createPlayerSnapshot,
     calculateAttributeOverall,
+    enforceAttributeApex,
+    auditAttributeApex,
     seasonLabel,
     getTeam,
     getTeamHistory,

@@ -44,6 +44,36 @@
     return allocation;
   }
 
+  function allocatePositionAwareRotation(roster) {
+    const players = (Array.isArray(roster) ? roster : []).filter(Boolean);
+    const allocation = allocateRotation(players);
+    const positions = player => Array.isArray(player.positions) && player.positions.length ? player.positions : [player.pos];
+    let available = 0;
+    players.forEach(player => {
+      const competitors = players.filter(other => (
+        other.id !== player.id
+        && (Number(other.ovr) || 0) >= (Number(player.ovr) || 0) - 3
+        && positions(other).some(position => positions(player).includes(position))
+      )).length;
+      if (competitors <= 1) return;
+      const reduction = Math.min(Math.max(0, (allocation[player.id] || 0) - 4), Math.round((competitors - 1) * 3.5));
+      allocation[player.id] -= reduction;
+      available += reduction;
+    });
+    const receivers = players.slice().sort((left, right) => {
+      const leftCoverage = players.filter(player => positions(player).some(position => positions(left).includes(position))).length;
+      const rightCoverage = players.filter(player => positions(player).some(position => positions(right).includes(position))).length;
+      return leftCoverage - rightCoverage || right.ovr - left.ovr;
+    });
+    while (available > 0) {
+      const receiver = receivers.find(player => (allocation[player.id] || 0) < 42);
+      if (!receiver) break;
+      allocation[receiver.id] += 1;
+      available -= 1;
+    }
+    return allocation;
+  }
+
   function rotationTotal(allocation) {
     return Object.values(allocation).reduce((sum, minutes) => sum + minutes, 0);
   }
@@ -194,6 +224,98 @@
         return selected.length >= limit;
       });
     return selected;
+  }
+
+  function summarizePeriodScores(periods) {
+    const normalized = (Array.isArray(periods) ? periods : []).map((period, index) => ({
+      period: index + 1,
+      label: index < 4 ? `Q${index + 1}` : `OT${index - 3}`,
+      own: Math.max(0, Math.round(Number(period?.own) || 0)),
+      opponent: Math.max(0, Math.round(Number(period?.opponent) || 0))
+    }));
+    const ownScore = normalized.reduce((sum, period) => sum + period.own, 0);
+    const opponentScore = normalized.reduce((sum, period) => sum + period.opponent, 0);
+    return {
+      periods: normalized,
+      ownScore,
+      opponentScore,
+      tied: ownScore === opponentScore,
+      complete: normalized.length >= 4 && ownScore !== opponentScore,
+      won: normalized.length >= 4 && ownScore !== opponentScore ? ownScore > opponentScore : null
+    };
+  }
+
+  function playerContributionWeight(player) {
+    const games = Math.max(0, Number(player?.games) || 0);
+    const availability = clamp(games / 82, 0, 1);
+    const minutes = clamp(Number(player?.minutes ?? player?.min) || 0, 0, 48);
+    const pts = Number(player?.pts) || 0;
+    const reb = Number(player?.reb) || 0;
+    const ast = Number(player?.ast) || 0;
+    const stl = Number(player?.stl) || 0;
+    const blk = Number(player?.blk) || 0;
+    const tov = Number(player?.tov) || 0;
+    const trueShooting = Number(player?.trueShooting ?? player?.ts) || 56;
+    const defense = Number(player?.defense) || 70;
+    const production = pts + reb * 0.65 + ast * 0.82 + stl * 1.25 + blk * 1.15 - tov * 0.72;
+    const efficiency = clamp(0.82 + (trueShooting - 54) * 0.018, 0.72, 1.18);
+    const defenseFactor = clamp(0.9 + (defense - 70) * 0.0045, 0.82, 1.14);
+    const roleFactor = clamp(0.35 + minutes / 48 * 0.65, 0.35, 1);
+    return Math.max(0.01, production * efficiency * defenseFactor * roleFactor * Math.max(0.08, availability));
+  }
+
+  function allocateWinContributions(players) {
+    const groups = new Map();
+    (Array.isArray(players) ? players : []).forEach(player => {
+      const teamId = player?.teamId || `player:${player?.name || groups.size}`;
+      if (!groups.has(teamId)) groups.set(teamId, []);
+      groups.get(teamId).push(player);
+    });
+    const result = [];
+    groups.forEach(teamPlayers => {
+      const wins = Math.max(0, Number(teamPlayers[0]?.wins) || 0);
+      const weighted = teamPlayers.map(player => ({ player, weight: playerContributionWeight(player) }));
+      const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0) || 1;
+      const contributions = weighted.map(item => wins * item.weight / totalWeight);
+      const rounded = contributions.map(value => Math.round(value * 100) / 100);
+      if (rounded.length) {
+        const difference = Math.round((wins - rounded.reduce((sum, value) => sum + value, 0)) * 100) / 100;
+        rounded[0] = Math.round((rounded[0] + difference) * 100) / 100;
+      }
+      weighted.forEach((item, index) => result.push({
+        ...item.player,
+        contributionWeight: Math.round(item.weight * 100) / 100,
+        contributionShare: Math.round(item.weight / totalWeight * 10000) / 10000,
+        winContribution: rounded[index]
+      }));
+    });
+    return result;
+  }
+
+  function calculateRosterBalance(players, positions = ['PG', 'SG', 'SF', 'PF', 'C']) {
+    const roster = (Array.isArray(players) ? players : []).filter(player => player && player.active !== false);
+    const details = {};
+    let score = 0;
+    positions.forEach(position => {
+      const eligible = roster.map(player => {
+        const playerPositions = Array.isArray(player.positions) && player.positions.length ? player.positions : [player.pos];
+        const primary = playerPositions[0] === position;
+        const secondary = !primary && playerPositions.includes(position);
+        return { player, factor: primary ? 1 : (secondary ? 0.88 : 0) };
+      }).filter(item => item.factor > 0).sort((left, right) => right.player.ovr * right.factor - left.player.ovr * left.factor);
+      const coverage = eligible.reduce((sum, item) => sum + (item.factor === 1 ? 1 : 0.45), 0);
+      const starter = (Number(eligible[0]?.player.ovr) || 55) * (eligible[0]?.factor || 1);
+      const backup = (Number(eligible[1]?.player.ovr) || 52) * (eligible[1]?.factor || 1);
+      const deficit = Math.max(0, 2 - coverage);
+      const congestion = Math.max(0, coverage - 3.25);
+      score += starter * 0.22 + backup * 0.12 - deficit * 11 - congestion * 5.5;
+      details[position] = { coverage: Math.round(coverage * 100) / 100, starter: Math.round(starter), backup: Math.round(backup), deficit, congestion: Math.round(congestion * 100) / 100 };
+    });
+    const allocation = allocateRotation(roster);
+    const rotationPlayers = Object.values(allocation).filter(minutes => minutes >= 10).length;
+    const unusedPlayers = Object.values(allocation).filter(minutes => minutes < 4).length;
+    score += rotationPlayers * 1.4 - unusedPlayers * 0.8;
+    return { score: Math.round(score * 100) / 100, details, rotationPlayers, unusedPlayers };
   }
 
   function bestOfSevenWinProbability(gameWinProbability) {
@@ -422,9 +544,12 @@
     const usage = Number(player?.usage) || 25;
     const production = pts * 0.72 + reb * 0.22 + ast * 0.34 - tov * 0.2;
     const efficiency = clamp((trueShooting - 52) * 0.28, -2, 4);
-    const teamSuccess = wins >= 55 ? 12 + (wins - 55) * 0.32
-      : (wins >= 50 ? 8 + (wins - 50) * 0.8
-        : (wins >= 42 ? (wins - 42) * 0.5 : -(42 - wins) * 0.75));
+    const winContribution = Number(player?.winContribution);
+    const teamSuccess = Number.isFinite(winContribution)
+      ? winContribution * 1.05 + clamp((wins - 41) * 0.075, -2.2, 2.2)
+      : (wins >= 55 ? 12 + (wins - 55) * 0.32
+        : (wins >= 50 ? 8 + (wins - 50) * 0.8
+          : (wins >= 42 ? (wins - 42) * 0.5 : -(42 - wins) * 0.75)));
     const ratingStability = Math.max(0, (Number(player?.ovr) || 75) - 80) * 0.12;
     const offensiveLoad = clamp((usage - 25) * 0.22, -1.5, 4);
     const availabilityScore = (availability - 0.79) * 8;
@@ -435,11 +560,16 @@
       production: Math.round(production * 100) / 100,
       efficiency: Math.round(efficiency * 100) / 100,
       teamSuccess: Math.round(teamSuccess * 100) / 100,
+      winContribution: Number.isFinite(winContribution) ? Math.round(winContribution * 100) / 100 : null,
       availability: Math.round(availabilityScore * 100) / 100,
       ratingStability: Math.round(ratingStability * 100) / 100,
       offensiveLoad: Math.round(offensiveLoad * 100) / 100,
       belowFiveHundredPenalty
     };
+  }
+
+  function calculateScoringLeaderScore(player) {
+    return (Number(player?.pts) || 0) * 100 + (Number(player?.games) || 0) / 100;
   }
 
   function calculateFinalsMvpScore(player) {
@@ -812,6 +942,7 @@
     ROTATION_TEMPLATE,
     nextRandom,
     allocateRotation,
+    allocatePositionAwareRotation,
     rotationTotal,
     normalizeTeamRecords,
     conferenceSeeds,
@@ -820,6 +951,10 @@
     calculateOffensiveUsage,
     calculatePlaymakingImpact,
     selectAwardFinalists,
+    summarizePeriodScores,
+    playerContributionWeight,
+    allocateWinContributions,
+    calculateRosterBalance,
     bestOfSevenWinProbability,
     tradeValue,
     calculateTradeProbability,
@@ -827,6 +962,7 @@
     calculateStatProfile,
     historicalAttributeCeiling,
     calculateMvpScore,
+    calculateScoringLeaderScore,
     calculateFinalsMvpScore,
     calculateAllNbaScore,
     selectAllNbaTeams,

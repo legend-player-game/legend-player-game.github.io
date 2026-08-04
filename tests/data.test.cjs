@@ -97,20 +97,16 @@ test('public and simulated OVR use one value in every era', () => {
   global.GAME_DATA.setEra('current');
 });
 
-test('current-era 99 ratings are rare and limited to audited signature skills', () => {
+test('every era has one or two apex players for each gameplay attribute', () => {
+  ['current', '2003', '2009'].forEach(eraKey => {
+    global.GAME_DATA.setEra(eraKey);
+    const audit = global.GAME_DATA.auditAttributeApex(global.GAME_DATA.PLAYERS);
+    global.GAME_DATA.ATTRS.filter(([key]) => key !== 'POT').forEach(([key]) => {
+      assert.ok(audit[key].length >= 1, `${eraKey}:${key} should have an apex player`);
+      assert.ok(audit[key].length <= 2, `${eraKey}:${key} should have at most two apex players`);
+    });
+  });
   global.GAME_DATA.setEra('current');
-  const ratings = Object.values(global.GAME_DATA.PLAYERS).flat().flatMap(player => (
-    global.GAME_DATA.ATTRS
-      .filter(([key]) => key !== 'POT' && player[key] === 99)
-      .map(([key]) => `${player.name}:${key}`)
-  ));
-  assert.deepEqual(ratings.sort(), [
-    '尼古拉-约基奇:PAS',
-    '斯蒂芬-库里:threePT',
-    '扬尼斯-阿德托昆博:DNK',
-    '扬尼斯-阿德托昆博:FIN',
-    '维克托·文班亚马:BLK'
-  ].sort());
 });
 
 test('all 30 teams include championship history and a five-player franchise ranking', () => {

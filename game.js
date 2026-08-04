@@ -201,6 +201,23 @@
     state.season.champion = false;
   }
 
+  function activatePlayInDebugState() {
+    activatePlayoffDebugState();
+    const rawWins = Object.fromEntries(DATA.TEAMS.map((team, index) => [team.id, 34 + index % 18]));
+    state.career.league.teamRecords = SIM.normalizeTeamRecords(
+      DATA.TEAMS.map(team => team.id),
+      rawWins,
+      { teamId: state.careerTeam, wins: 44 }
+    );
+    state.career.league.standings = SIM.conferenceSeeds(DATA.TEAMS, state.career.league.teamRecords);
+    state.season.stage = 'playin';
+    state.season.seed = 7;
+    state.season.originalSeed = 7;
+    state.season.playInStep = 1;
+    state.season.series = [];
+    state.season.postseasonBracket = null;
+  }
+
   function activateInjuryDebugState(type) {
     state = buildDebugCareerState(1);
     state.season = {
@@ -1083,6 +1100,32 @@
     return player.attrs;
   }
 
+  function enforceLeagueAttributeApex(league) {
+    const players = (league?.players || []).filter(player => player.active !== false);
+    players.forEach(ensureLeaguePlayerAttributes);
+    const audit = {};
+    DATA.ATTRS.filter(([key]) => key !== 'POT').forEach(([key]) => {
+      const ranked = players.slice().sort((left, right) => (
+        right.attrs[key] - left.attrs[key] || right.ovr - left.ovr || left.name.localeCompare(right.name)
+      ));
+      const carriers = ranked.filter(player => player.attrs[key] >= 99)
+        .sort((left, right) => Number(right.isUser) - Number(left.isUser) || right.ovr - left.ovr);
+      carriers.slice(2).forEach(player => { player.attrs[key] = 98; });
+      if (ranked.length && !ranked.some(player => player.attrs[key] >= 99)) ranked[0].attrs[key] = 99;
+      audit[key] = ranked.filter(player => player.attrs[key] === 99).map(player => player.name);
+    });
+    players.forEach(player => {
+      player.attributeOvr = DATA.calculateAttributeOverall(player.attrs, player.pos);
+      player.defense = Math.round(['PDEF', 'IDEF', 'BLK', 'REB'].reduce((sum, key) => sum + player.attrs[key], 0) / 4);
+      if (player.isUser) {
+        DATA.ATTRS.forEach(([key]) => { state.attrs[key] = player.attrs[key]; });
+      }
+    });
+    league.attributeApexAudit = audit;
+    league.attributeApexSeasonNumber = league.seasonNumber;
+    return audit;
+  }
+
   function createLeaguePlayer(player) {
     const age = Number.isFinite(player.age) ? player.age : 24;
     const eraStartYear = DATA.getEra(state.eraKey).startYear;
@@ -1226,6 +1269,7 @@
     player.attrs = Object.fromEntries(DATA.ATTRS.map(([key]) => [key, state.attrs[key]]));
     ensureLeaguePlayerAttributes(player);
     if (league.players.filter(item => item.active && item.teamId === player.teamId).length > 15) trimLeagueRosters(league);
+    enforceLeagueAttributeApex(league);
     return player;
   }
 
@@ -1351,6 +1395,31 @@
     }));
   }
 
+  function teamRosterBalance(league, teamId, options = {}) {
+    const outgoingIds = new Set(options.outgoingIds || []);
+    const roster = league.players.filter(player => (
+      player.active && player.teamId === teamId && !outgoingIds.has(player.id)
+    ));
+    (options.incoming || []).forEach(player => roster.push({ ...player, teamId }));
+    const rotationRoster = roster.sort((left, right) => right.ovr - left.ovr).slice(0, 15);
+    return SIM.calculateRosterBalance(rotationRoster);
+  }
+
+  function rosterFitChange(league, teamId, options = {}) {
+    const before = teamRosterBalance(league, teamId);
+    const after = teamRosterBalance(league, teamId, options);
+    return {
+      before: before.score,
+      after: after.score,
+      delta: Math.round((after.score - before.score) * 10) / 10,
+      details: after.details
+    };
+  }
+
+  function rosterFitLabel(delta) {
+    return delta >= 6 ? '显著补强阵容' : (delta >= 1.5 ? '改善阵容适配' : (delta > -2 ? '阵容适配一般' : '存在位置拥堵'));
+  }
+
   function recentTeamTrade(league, leftTeamId, rightTeamId, seasonNumber, window = 2) {
     return (league.transactionHistory || []).some(transaction => (
       seasonNumber - transaction.seasonNumber <= window
@@ -1364,10 +1433,10 @@
     if (recentTeamTrade(league, first.teamId, second.teamId, seasonNumber)) return -Infinity;
     const valueDifference = Math.abs(SIM.tradeValue(first) - SIM.tradeValue(second));
     if (valueDifference > 14 || Math.abs(first.ovr - second.ovr) > 6) return -Infinity;
-    const firstTeamNeed = teamPositionNeed(league, first.teamId, leaguePlayerPositions(second), first.id);
-    const secondTeamNeed = teamPositionNeed(league, second.teamId, leaguePlayerPositions(first), second.id);
-    const samePosition = leaguePlayerPositions(first).some(position => leaguePlayerPositions(second).includes(position));
-    return firstTeamNeed + secondTeamNeed + (samePosition ? 4 : 0) - valueDifference * 1.8;
+    const firstFit = rosterFitChange(league, first.teamId, { outgoingIds: [first.id], incoming: [second] });
+    const secondFit = rosterFitChange(league, second.teamId, { outgoingIds: [second.id], incoming: [first] });
+    if (firstFit.delta < -8 || secondFit.delta < -8) return -Infinity;
+    return (firstFit.delta + secondFit.delta) * 3.2 - valueDifference * 1.8;
   }
 
   function userTradeCandidates(league, oldTeamId) {
@@ -1381,15 +1450,16 @@
       .map(player => {
         const valueDifference = Math.abs(SIM.tradeValue(player) - SIM.tradeValue(user));
         const ovrDifference = Math.abs(player.ovr - user.ovr);
-        const targetNeed = teamPositionNeed(league, player.teamId, leaguePlayerPositions(user), player.id);
-        const oldTeamNeed = teamPositionNeed(league, oldTeamId, leaguePlayerPositions(player), user.id);
-        const samePosition = leaguePlayerPositions(player).some(position => leaguePlayerPositions(user).includes(position));
+        const targetFit = rosterFitChange(league, player.teamId, { outgoingIds: [player.id], incoming: [user] });
+        const oldTeamFit = rosterFitChange(league, oldTeamId, { outgoingIds: [user.id], incoming: [player] });
         const targetWins = league.teamRecords?.[player.teamId]?.wins ?? 41;
         const strategyFit = user.age <= 25 && targetWins < 40 ? 4 : (user.ovr >= 88 && targetWins >= 42 ? 5 : 0);
-        const score = targetNeed * 0.7 + oldTeamNeed * 0.45 + strategyFit + (samePosition ? 5 : 0) - valueDifference * 1.9 - ovrDifference * 1.2;
-        return { player, valueDifference, ovrDifference, targetNeed, oldTeamNeed, score };
+        const score = (targetFit.delta + oldTeamFit.delta) * 3 + strategyFit - valueDifference * 1.9 - ovrDifference * 1.2;
+        return { player, valueDifference, ovrDifference, targetFit, oldTeamFit, score };
       })
-      .filter(candidate => candidate.valueDifference <= 22 && candidate.ovrDifference <= 7 && !recentTeamTrade(league, oldTeamId, candidate.player.teamId, state.career.seasonNumber + 1, 3))
+      .filter(candidate => candidate.valueDifference <= 22 && candidate.ovrDifference <= 7
+        && candidate.targetFit.delta >= -8 && candidate.oldTeamFit.delta >= -8
+        && !recentTeamTrade(league, oldTeamId, candidate.player.teamId, state.career.seasonNumber + 1, 3))
       .sort((left, right) => right.score - left.score || left.valueDifference - right.valueDifference || left.ovrDifference - right.ovrDifference);
   }
 
@@ -1519,15 +1589,26 @@
   function projectedUserRole(teamId) {
     const league = ensureLeagueState();
     const user = { ...syncUserLeaguePlayer(), teamId };
-    const roster = league.players.filter(player => player.active && !player.isUser && player.teamId === teamId).concat(user)
+    return projectedPlayerRole(league, teamId, user);
+  }
+
+  function projectedPlayerRole(league, teamId, player) {
+    const roster = league.players.filter(item => item.active && item.id !== player.id && !item.isUser && item.teamId === teamId).concat({ ...player, teamId })
       .sort((left, right) => right.ovr - left.ovr || String(left.id).localeCompare(String(right.id))).slice(0, 15);
-    const allocation = SIM.allocateRotation(roster);
-    const rank = roster.findIndex(player => player.id === user.id);
-    const minutes = allocation[user.id] || 0;
-    const profile = leagueRoleProfile(user, roster, Math.max(0, rank), minutes);
-    const competitors = roster.filter(player => !player.isUser && leaguePlayerPositions(player).some(position => leaguePlayerPositions(user).includes(position)))
-      .slice(0, 3).map(player => ({ id: player.id, name: player.name, ovr: player.ovr, positions: leaguePlayerPositions(player) }));
-    return { minutes, usage: profile.usage, rotationRank: rank + 1, role: roleLabel(minutes), competitors };
+    const allocation = SIM.allocatePositionAwareRotation(roster);
+    const rank = roster.findIndex(item => item.id === player.id);
+    const competitors = roster.filter(item => item.id !== player.id && leaguePlayerPositions(item).some(position => leaguePlayerPositions(player).includes(position)))
+      .sort((left, right) => right.ovr - left.ovr)
+      .slice(0, 4);
+    const minutes = allocation[player.id] || 0;
+    const profile = leagueRoleProfile(player, roster, Math.max(0, rank), minutes);
+    return {
+      minutes,
+      usage: profile.usage,
+      rotationRank: rank + 1,
+      role: roleLabel(minutes),
+      competitors: competitors.slice(0, 3).map(item => ({ id: item.id, name: item.name, ovr: item.ovr, positions: leaguePlayerPositions(item) }))
+    };
   }
 
   function teamMarketContext(teamId) {
@@ -1581,14 +1662,18 @@
     const candidates = DATA.TEAMS.map(team => {
       const context = teamMarketContext(team.id);
       const need = teamPositionNeed(league, team.id, leaguePlayerPositions(user), user.id);
+      const fit = rosterFitChange(league, team.id, { outgoingIds: [user.id], incoming: [{ ...user, teamId: team.id }] });
+      const projection = projectedPlayerRole(league, team.id, { ...user, teamId: team.id });
       const strategyFit = age <= 25 && context.phase === '重建' ? 8 : (state.finalOVR >= 86 && context.phase === '争冠' ? 9 : 0);
       const isMotherTeam = team.id === motherTeamId;
       const motherBonus = isMotherTeam
         ? 4 + (state.career.teamRelationships[team.id] ?? 55) * 0.08 + motherLegacy.score * 0.035 + motherRetention.probability * 18
         : 0;
       const rightsBonus = (rookieRightsOffer || motherRetention.guaranteed) && isMotherTeam ? 1000 : 0;
-      const score = marketValue + need * 0.38 + strategyFit + motherBonus + rightsBonus + randomNormal() * (waitRound ? 4 : 7);
-      return { team, context, need, score, isMotherTeam };
+      const opportunityScore = projection.minutes < 10 ? -28 : (projection.minutes < 18 ? -12 : Math.min(8, (projection.minutes - 18) * 0.55));
+      const fitScore = fit.delta * 2.6;
+      const score = marketValue + need * 0.18 + fitScore + opportunityScore + strategyFit + motherBonus + rightsBonus + randomNormal() * (waitRound ? 4 : 7);
+      return { team, context, need, fit, projection, score, isMotherTeam };
     }).sort((left, right) => right.score - left.score);
     const threshold = waitRound ? 15 : 27;
     const eligible = candidates.filter(candidate => candidate.score >= threshold || (candidate.isMotherTeam && motherWillOffer));
@@ -1604,7 +1689,7 @@
       selectedOffers.push(motherCandidate);
     }
     return selectedOffers.map((candidate, index) => {
-      const projection = projectedUserRole(candidate.team.id);
+      const projection = candidate.projection;
       const yearsCap = age >= 35 ? 1 : (age >= 32 ? 2 : (age <= 26 ? 5 : 4));
       const years = clamp(yearsCap - Math.floor(index / 2) - (waitRound ? 1 : 0), 1, 5);
       const annualSalary = Math.max(1, Math.round((state.finalOVR - 67) * 1.5 + candidate.need * 0.11 + (candidate.team.id === state.career.currentTeam ? 1 : 0)));
@@ -1613,6 +1698,8 @@
         years,
         annualSalary,
         projection,
+        rosterFitDelta: candidate.fit.delta,
+        rosterFit: rosterFitLabel(candidate.fit.delta),
         ...candidate.context,
         isCurrentTeam: candidate.team.id === state.career.currentTeam,
         retentionReasons: candidate.isMotherTeam ? motherRetention.reasons : [],
@@ -1654,7 +1741,7 @@
         .filter(player => player.active && player.teamId === team.id)
         .sort((left, right) => right.ovr - left.ovr || String(left.id).localeCompare(String(right.id)))
         .slice(0, 15);
-      const allocation = SIM.allocateRotation(roster);
+      const allocation = SIM.allocatePositionAwareRotation(roster);
       const user = roster.find(player => player.isUser);
       if (user && userPenalty > 0) {
         const original = allocation[user.id] || 0;
@@ -1757,6 +1844,7 @@
     if (league.eraKey !== 'current') addRookieClass(league, 1);
     fillLeagueRosters(league, 1);
     trimLeagueRosters(league);
+    enforceLeagueAttributeApex(league);
     return league;
   }
 
@@ -1882,6 +1970,7 @@
     fillLeagueRosters(league, nextSeasonNumber);
     trimLeagueRosters(league);
     league.seasonNumber = nextSeasonNumber;
+    enforceLeagueAttributeApex(league);
     league.healthSeasonNumber = null;
     league.profileSeasonNumber = null;
     league.retiredCount += retired;
@@ -1904,13 +1993,16 @@
           .map(team => {
             const count = league.players.filter(item => item.active && item.teamId === team.id).length;
             const wins = league.teamRecords?.[team.id]?.wins ?? 41;
-            const need = teamPositionNeed(league, team.id, leaguePlayerPositions(player));
+            const fit = rosterFitChange(league, team.id, { incoming: [{ ...player, teamId: team.id }] });
+            const projection = projectedPlayerRole(league, team.id, { ...player, teamId: team.id });
             const strategyFit = player.age <= 25 && wins < 40 ? 4 : (player.ovr >= 84 && wins >= 43 ? 4 : 0);
-            return { team, score: need + strategyFit - Math.max(0, count - 14) * 3 + randomNormal() * 1.5 };
+            const opportunity = projection.minutes < 10 ? -24 : (projection.minutes < 18 ? -10 : Math.min(6, (projection.minutes - 18) * 0.4));
+            return { team, fit, projection, score: fit.delta * 2.8 + opportunity + strategyFit - Math.max(0, count - 14) * 3 + randomNormal() * 1.5 };
           })
           .sort((left, right) => right.score - left.score)
-          .slice(0, 5);
-        const destination = destinations[Math.floor(random() * destinations.length)]?.team;
+          .filter(candidate => candidate.fit.delta >= -2 && candidate.projection.minutes >= 10)
+          .slice(0, 3);
+        const destination = destinations[Math.min(destinations.length - 1, Math.floor(random() * Math.max(1, Math.min(2, destinations.length))))]?.team;
         if (destination) {
           player.teamId = destination.id;
           league.transactionHistory.push({ seasonNumber: nextSeasonNumber, type: '自由签约', playerId: player.id, playerName: player.name, fromTeamId, toTeamId: destination.id });
@@ -2127,7 +2219,8 @@
       missingAges: activePlayers.filter(player => !Number.isFinite(player.age)).length,
       ageSources,
       currentRookies: rookies.length,
-      transactions: league.transactionHistory?.length || 0
+      transactions: league.transactionHistory?.length || 0,
+      attributeApexAudit: league.attributeApexAudit || null
     };
     app.innerHTML = `<section class="screen"><p class="step-label">LEAGUE DEBUG</p><h1>${eraKey} 纪元第 ${targetSeason} 季</h1><p class="subtitle">${DATA.seasonLabel(draftYear)} · ${rookies.length} 名新秀 · 累计 ${league.retiredCount} 人退役</p><div class="info-strip"><b>年龄范围</b> ${Math.min(...activeAges)}–${Math.max(...activeAges)} 岁</div><ol>${rookies.map(player => `<li>${player.draftOrder}. ${player.name} · ${player.age} 岁 · ${player.ovr}/${player.potential}</li>`).join('')}</ol><p>本次推进：${lastUpdate.retired} 人退役，${lastUpdate.rookies} 人入盟</p><pre id="league-audit">${JSON.stringify(auditReport)}</pre></section>`;
   }
@@ -2355,17 +2448,19 @@
       if (recentWinners[0] === player.name) repeatPenalty += 0.2;
       const scoreResult = score(player);
       const scoreValue = typeof scoreResult === 'object' ? scoreResult.total : scoreResult;
-      return { ...player, awardBreakdown: typeof scoreResult === 'object' ? scoreResult : null, awardScore: scoreValue - repeatPenalty + randomNormal() * 0.55 };
+      const scoreNoise = awardKey === 'scoring' ? 0 : randomNormal() * 0.55;
+      const appliedRepeatPenalty = awardKey === 'scoring' ? 0 : repeatPenalty;
+      return { ...player, awardBreakdown: typeof scoreResult === 'object' ? scoreResult : null, awardScore: scoreValue - appliedRepeatPenalty + scoreNoise };
     });
     return SIM.selectAwardFinalists(scored, {
       limit: 3,
-      maxPerTeam: awardKey === 'mvp' ? 1 : 3
+      maxPerTeam: 3
     });
   }
 
   function awardCandidate(player, type) {
     const lines = {
-      mvp: `${player.pts} 分 · ${player.ast} 助攻 · ${player.reb} 篮板 · ${player.wins} 胜`,
+      mvp: `${player.pts} 分 · ${player.ast} 助攻 · ${player.reb} 篮板 · ${player.wins} 胜 · 胜场贡献 ${Number(player.winContribution || 0).toFixed(1)}`,
       dpoy: `${player.stocks} 次抢断盖帽 · ${player.reb} 篮板 · 防守 ${player.defense}`,
       rookie: `${player.pts} 分 · ${player.ast} 助攻 · ${player.reb} 篮板 · ${player.ovr} OVR`,
       scoring: `${player.pts} 分 · ${player.games} 场`,
@@ -2402,10 +2497,11 @@
       wins: state.season.wins, games: state.season.playerGames || 0, availability: userAvailability,
       usage: state.season.roleProfile?.usage || 25
     };
-    const mvpRank = rankLeagueAward(userAwardEligible ? [...mvpPool, userProfile] : mvpPool, 'mvp', SIM.calculateMvpScore);
+    const mvpProfiles = SIM.allocateWinContributions(userAwardEligible ? [...mvpPool, userProfile] : mvpPool);
+    const mvpRank = rankLeagueAward(mvpProfiles, 'mvp', SIM.calculateMvpScore);
     const dpoyRank = rankLeagueAward(userAwardEligible ? [...mvpPool, userProfile] : mvpPool, 'dpoy', player => player.defense * 0.9 + player.stocks * 4.5 + player.reb * 0.35 + player.wins * 0.1);
     const scoringEligibleWithUser = (state.season.playerGames || 0) >= 58 ? [...scoringPool, userProfile] : scoringPool;
-    const scoringRank = rankLeagueAward(scoringEligibleWithUser, 'scoring', player => player.pts * 3 + player.ovr * 0.12);
+    const scoringRank = rankLeagueAward(scoringEligibleWithUser, 'scoring', SIM.calculateScoringLeaderScore);
     const rookieRank = rankLeagueAward(state.career.seasonNumber === 1 ? [...rookiePool, userProfile] : rookiePool, 'rookie', player => player.ovr * 0.8 + player.pts * 0.7 + player.ast * 0.25 + player.reb * 0.2);
     const mvp = mvpRank[0];
     const dpoy = dpoyRank[0];
@@ -2423,7 +2519,7 @@
     const userAllNba = allNbaSelections.find(player => player.isUser);
     if (userAllNba) allNba = `最佳阵容${['一', '二', '三'][userAllNba.allNbaTeam - 1]}阵`;
     const awards = [
-      { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), reason: '综合个人产量、球队胜场、进攻主导权和赛季出勤率评定；同队球星会分流选票，前三候选每队最多一人。' },
+      { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), reason: '综合个人产量、效率、进攻主导权和出勤率评定；球队胜场按队内贡献比例守恒分配，同队核心可以同时进入前三。' },
       { label: '最佳防守球员', short: 'DPOY', winner: dpoy.name, detail: awardCandidate(dpoy, 'dpoy').detail, isUser: userDPOY, candidates: dpoyRank.map(player => awardCandidate(player, 'dpoy')), reason: '重点比较防守属性、抢断盖帽、篮板保护和球队胜场。' },
       { label: '年度最佳新秀', short: 'ROTY', winner: rookie.name, detail: awardCandidate(rookie, 'rookie').detail, isUser: userROTY, candidates: rookieRank.map(player => awardCandidate(player, 'rookie')), reason: '仅比较本届新秀的即时能力、数据产量和承担角色。' },
       { label: '常规赛得分王', short: 'SC', winner: scoring.name, detail: awardCandidate(scoring, 'scoring').detail, isUser: userScoring, candidates: scoringRank.map(player => awardCandidate(player, 'scoring')), reason: '以符合出勤门槛后的场均得分为首要依据。' },
@@ -2457,21 +2553,36 @@
       0,
       playoffContext(state.careerTeam, opponent, 0, 1)
     );
-    state.season.playInSimulation = { opponent, quarter: 0, myScore: 0, theirScore: 0 };
+    state.season.playInSimulation = { opponent, quarter: 0, myScore: 0, theirScore: 0, periodScores: [] };
     renderSeason();
     const timer = startSimulationTimer(() => {
       const sim = state.season.playInSimulation;
-      sim.quarter += 1;
-      sim.myScore += Math.max(17, Math.round(26 + (chance - 0.5) * 9 + randomNormal() * 4));
-      sim.theirScore += Math.max(17, Math.round(26 - (chance - 0.5) * 9 + randomNormal() * 4));
+      const overtime = sim.periodScores.length >= 4;
+      const forcedTieTest = localDebugParam('playInTie') === '1';
+      sim.periodScores.push(forcedTieTest
+        ? (overtime ? { own: 12, opponent: 9 } : { own: 25, opponent: 25 })
+        : {
+          own: Math.max(overtime ? 5 : 17, Math.round((overtime ? 11 : 26) + (chance - 0.5) * (overtime ? 4 : 9) + randomNormal() * (overtime ? 2.5 : 4))),
+          opponent: Math.max(overtime ? 5 : 17, Math.round((overtime ? 11 : 26) - (chance - 0.5) * (overtime ? 4 : 9) + randomNormal() * (overtime ? 2.5 : 4)))
+        });
+      const summary = SIM.summarizePeriodScores(sim.periodScores);
+      sim.quarter = summary.periods.length;
+      sim.myScore = summary.ownScore;
+      sim.theirScore = summary.opponentScore;
       renderSeason();
-      if (sim.quarter >= 4) {
+      if (summary.complete) {
         stopSimulationTimer(timer);
-        const won = random() < chance;
-        if (won && sim.myScore <= sim.theirScore) sim.myScore = sim.theirScore + Math.ceil(random() * 6);
-        if (!won && sim.myScore >= sim.theirScore) sim.theirScore = sim.myScore + Math.ceil(random() * 6);
+        const won = summary.won;
         const playInStep = state.season.playInStep || 1;
-        state.season.series.push({ label: playInStep === 1 ? '附加赛首战' : '附加赛决胜战', opponent, won, score: `${sim.myScore}-${sim.theirScore}` });
+        state.season.series.push({
+          label: playInStep === 1 ? '附加赛首战' : '附加赛决胜战',
+          opponent,
+          won,
+          score: `${summary.ownScore}-${summary.opponentScore}`,
+          periodScores: summary.periods
+        });
+        simulatePostseasonTeamBoxScore(state.careerTeam, summary.ownScore, won, false);
+        simulatePostseasonTeamBoxScore(opponent, summary.opponentScore, !won, false);
         state.season.playInSimulation = null;
         advanceInjuryRecovery();
         const originalSeed = state.season.originalSeed || state.season.seed;
@@ -2933,11 +3044,9 @@
 
   function tradeFitDescription(candidate) {
     const player = candidate.player;
-    const samePosition = leaguePlayerPositions(player).includes(state.position);
-    const positionName = DATA.POSITIONS[state.position]?.name || state.position;
-    if (samePosition) return `双方以${positionName}核心完成对位调整`;
-    if (candidate.targetNeed >= candidate.oldTeamNeed) return `${DATA.getTeam(player.teamId).name}需要补强${positionName}`;
-    return `${DATA.getTeam(state.career.currentTeam).name}获得更符合阵容短板的球员`;
+    const targetDescription = rosterFitLabel(candidate.targetFit?.delta || 0);
+    const oldTeamDescription = rosterFitLabel(candidate.oldTeamFit?.delta || 0);
+    return `${DATA.getTeam(player.teamId).name}${targetDescription}，${DATA.getTeam(state.career.currentTeam).name}${oldTeamDescription}`;
   }
 
   function executeUserTrade(league, oldTeamId, candidate, type) {
@@ -3744,9 +3853,9 @@
       const opponent = DATA.getTeam(sim.opponent);
       return `
         <section class="season-panel simulation-panel">
-          <div class="simulation-heading"><div><span class="live-dot"></span><b>${(state.season.playInStep || 1) === 1 && (state.season.originalSeed || state.season.seed) <= 8 ? '附加赛席位战' : '附加赛生死战'}</b></div><strong>${sim.quarter ? `第 ${sim.quarter} 节` : '准备开赛'}</strong></div>
+          <div class="simulation-heading"><div><span class="live-dot"></span><b>${(state.season.playInStep || 1) === 1 && (state.season.originalSeed || state.season.seed) <= 8 ? '附加赛席位战' : '附加赛生死战'}</b></div><strong>${sim.quarter ? (sim.quarter <= 4 ? `第 ${sim.quarter} 节` : `加时 ${sim.quarter - 4}`) : '准备开赛'}</strong></div>
           <div class="live-scoreboard"><div><img src="${DATA.getTeam(state.careerTeam).logo}" alt=""><span>我的球队</span><b>${sim.myScore}</b></div><em>VS</em><div><img src="${opponent.logo}" alt=""><span>${opponent.name}</span><b>${sim.theirScore}</b></div></div>
-          <div class="quarter-track">${[1,2,3,4].map(quarter => `<i class="${quarter <= sim.quarter ? 'is-complete' : ''}">Q${quarter}</i>`).join('')}</div>
+          <div class="quarter-track">${Array.from({ length: Math.max(4, sim.quarter) }, (_, index) => `<i class="${index < sim.quarter ? 'is-complete' : ''}">${index < 4 ? `Q${index + 1}` : `OT${index - 3}`}</i>`).join('')}</div>
         </section>`;
     }
     return `
@@ -3950,6 +4059,7 @@
           <p class="my-franchise-basis"><b>规则说明</b>${offer.userFranchiseRankBasis}</p>` : ''}
       </div>
       <div class="offer-role-grid"><div><span>预计角色</span><b>${offer.projection.role}</b></div><div><span>预计时间</span><b>${offer.projection.minutes} 分钟</b></div><div><span>预计球权</span><b>${offer.projection.usage}%</b></div><div><span>轮换顺位</span><b>第 ${offer.projection.rotationRank} 位</b></div></div>
+      <p class="offer-attitude"><b>阵容适配</b>${offer.rosterFit} · 适配变化 ${offer.rosterFitDelta >= 0 ? '+' : ''}${offer.rosterFitDelta}</p>
       <p class="offer-competition"><b>位置竞争：</b>${competition}</p>
       <details><summary>查看主要球员名单</summary><div class="offer-roster">${offerRosterHTML(offer)}</div></details>
       <button class="primary-btn" type="button" data-action="choose-contract" data-team="${offer.teamId}">接受${offer.isCurrentTeam ? '续约' : '报价'}</button>
@@ -4383,6 +4493,7 @@
   const debugSeason = Number(debugParams.get('careerTest'));
   const awardDebugSeason = Number(debugParams.get('awardTest'));
   const playoffDebug = debugParams.get('playoffTest') === '1';
+  const playInDebug = debugParams.get('playinTest') === '1';
   const archetypeDebug = debugParams.get('archetypeTest');
   const eraDebug = debugParams.get('eraTest');
   const draftDebug = debugParams.get('draftTest');
@@ -4419,6 +4530,7 @@
           missingAges: activePlayers.filter(player => !Number.isFinite(player.age)).length,
           ageSources,
           currentRookies: activePlayers.filter(player => player.seasons === 0).length,
+          attributeApexAudit: league.attributeApexAudit || null,
           rotationTotals,
           transactionCount: league.transactionHistory?.length || 0,
           retiredCount: league.retiredCount || 0,
@@ -4440,6 +4552,10 @@
   } else if (isLocalDebug && awardDebugSeason >= 1 && awardDebugSeason <= CAREER_SEASONS) {
     debugCareerMode = true;
     activateAwardDebugState(awardDebugSeason);
+    renderSeason();
+  } else if (isLocalDebug && playInDebug) {
+    debugCareerMode = true;
+    activatePlayInDebugState();
     renderSeason();
   } else if (isLocalDebug && playoffDebug) {
     debugCareerMode = true;

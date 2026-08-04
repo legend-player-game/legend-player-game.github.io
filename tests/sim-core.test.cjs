@@ -29,6 +29,21 @@ test('short-handed rotation still conserves 240 minutes', () => {
   assert.ok(Object.values(allocation).every(minutes => minutes <= 48));
 });
 
+test('position-aware rotation conserves minutes and reduces opportunity in a crowded role', () => {
+  const balanced = ['PG', 'SG', 'SF', 'PF', 'C'].flatMap((pos, index) => [
+    { id: `${pos}-starter`, pos, positions: [pos], ovr: 90 - index },
+    { id: `${pos}-backup`, pos, positions: [pos], ovr: 80 - index }
+  ]);
+  const crowded = balanced.concat([
+    { id: 'pg-extra-1', pos: 'PG', positions: ['PG'], ovr: 87 },
+    { id: 'pg-extra-2', pos: 'PG', positions: ['PG'], ovr: 86 }
+  ]);
+  const normalMinutes = SIM.allocatePositionAwareRotation(balanced)['PG-backup'];
+  const crowdedAllocation = SIM.allocatePositionAwareRotation(crowded);
+  assert.equal(SIM.rotationTotal(crowdedAllocation), 240);
+  assert.ok(crowdedAllocation['PG-backup'] < normalMinutes);
+});
+
 test('team records conserve league wins and losses', () => {
   const teams = Array.from({ length: 30 }, (_, index) => `T${index}`);
   const rawWins = Object.fromEntries(teams.map((teamId, index) => [teamId, 25 + index]));
@@ -213,6 +228,12 @@ test('MVP score favors a 52-win core over a slightly better 38-win stat line', (
   assert.ok(winner.total > loser.total + 3);
 });
 
+test('scoring leader ranking is decided by points per game before other ratings', () => {
+  const lowerRatedLeader = SIM.calculateScoringLeaderScore({ pts: 30, games: 78, ovr: 82 });
+  const higherRatedRunnerUp = SIM.calculateScoringLeaderScore({ pts: 27.6, games: 82, ovr: 99 });
+  assert.ok(lowerRatedLeader > higherRatedRunnerUp);
+});
+
 test('MVP finalists do not contain multiple stars from the same team', () => {
   const finalists = SIM.selectAwardFinalists([
     { name: 'A队核心一', teamId: 'A', awardScore: 92 },
@@ -221,6 +242,57 @@ test('MVP finalists do not contain multiple stars from the same team', () => {
     { name: 'C队核心', teamId: 'C', awardScore: 86 }
   ], { limit: 3, maxPerTeam: 1 });
   assert.deepEqual(finalists.map(player => player.name), ['A队核心一', 'B队核心', 'C队核心']);
+});
+
+test('period scoring is the single source of play-in totals and result', () => {
+  const regulation = SIM.summarizePeriodScores([
+    { own: 28, opponent: 24 }, { own: 21, opponent: 27 },
+    { own: 30, opponent: 25 }, { own: 22, opponent: 20 }
+  ]);
+  assert.equal(regulation.ownScore, 101);
+  assert.equal(regulation.opponentScore, 96);
+  assert.equal(regulation.won, true);
+  assert.equal(regulation.complete, true);
+
+  const tied = SIM.summarizePeriodScores([
+    { own: 25, opponent: 25 }, { own: 25, opponent: 25 },
+    { own: 25, opponent: 25 }, { own: 25, opponent: 25 }
+  ]);
+  assert.equal(tied.complete, false);
+  const overtime = SIM.summarizePeriodScores([...tied.periods, { own: 12, opponent: 9 }]);
+  assert.equal(overtime.ownScore, 112);
+  assert.equal(overtime.opponentScore, 109);
+  assert.equal(overtime.periods[4].label, 'OT1');
+  assert.equal(overtime.won, true);
+});
+
+test('team wins are conserved while two elite teammates can both become MVP finalists', () => {
+  const allocated = SIM.allocateWinContributions([
+    { name: 'A队核心一', teamId: 'A', wins: 60, games: 80, minutes: 37, pts: 31, reb: 8, ast: 9, stl: 1.5, blk: 0.7, tov: 3, trueShooting: 63, defense: 88, ovr: 96 },
+    { name: 'A队核心二', teamId: 'A', wins: 60, games: 79, minutes: 36, pts: 28, reb: 7, ast: 8, stl: 1.2, blk: 0.6, tov: 2.5, trueShooting: 62, defense: 86, ovr: 94 },
+    { name: 'A队角色', teamId: 'A', wins: 60, games: 82, minutes: 20, pts: 9, reb: 4, ast: 2, stl: 0.6, blk: 0.2, tov: 1, trueShooting: 57, defense: 75, ovr: 78 },
+    { name: 'B队核心', teamId: 'B', wins: 48, games: 80, minutes: 37, pts: 29, reb: 7, ast: 7, stl: 1, blk: 0.5, tov: 3, trueShooting: 61, defense: 84, ovr: 94 }
+  ]);
+  const teamA = allocated.filter(player => player.teamId === 'A');
+  assert.equal(Math.round(teamA.reduce((sum, player) => sum + player.winContribution, 0) * 100) / 100, 60);
+  const finalists = SIM.selectAwardFinalists(allocated.map(player => ({
+    ...player,
+    awardScore: SIM.calculateMvpScore(player).total
+  })), { limit: 3, maxPerTeam: 3 });
+  assert.equal(finalists.filter(player => player.teamId === 'A').length, 2);
+});
+
+test('roster balance rewards position coverage and penalizes congestion', () => {
+  const balanced = ['PG', 'SG', 'SF', 'PF', 'C'].flatMap((pos, index) => [
+    { id: `${pos}-1`, pos, positions: [pos], ovr: 88 - index },
+    { id: `${pos}-2`, pos, positions: [pos], ovr: 79 - index }
+  ]);
+  const congested = Array.from({ length: 10 }, (_, index) => ({ id: `pg-${index}`, pos: 'PG', positions: ['PG'], ovr: 88 - index }));
+  assert.ok(SIM.calculateRosterBalance(balanced).score > SIM.calculateRosterBalance(congested).score + 50);
+
+  const missingCenter = balanced.filter(player => player.pos !== 'C');
+  const withCenter = missingCenter.concat({ id: 'new-c', pos: 'C', positions: ['C'], ovr: 82 });
+  assert.ok(SIM.calculateRosterBalance(withCenter).score > SIM.calculateRosterBalance(missingCenter).score);
 });
 
 test('All-NBA scoring balances production, efficiency, defense and team success', () => {
