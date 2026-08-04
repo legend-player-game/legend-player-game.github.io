@@ -2498,24 +2498,75 @@
     return profiles;
   }
 
-  function rankLeagueAward(profiles, awardKey, score) {
+  function createAwardProfile(source) {
+    const attrs = source?.attrs || {};
+    const detailedDefense = ['PDEF', 'IDEF', 'BLK', 'REB']
+      .map(key => Number(attrs[key]))
+      .filter(Number.isFinite);
+    const defense = Number.isFinite(Number(source?.defense))
+      ? Number(source.defense)
+      : (detailedDefense.length ? detailedDefense.reduce((sum, value) => sum + value, 0) / detailedDefense.length : 70);
+    return {
+      ...source,
+      pts: Number(source?.pts) || 0,
+      ast: Number(source?.ast) || 0,
+      reb: Number(source?.reb) || 0,
+      stl: Number(source?.stl) || 0,
+      blk: Number(source?.blk) || 0,
+      stocks: Number(source?.stocks) || (Number(source?.stl) || 0) + (Number(source?.blk) || 0),
+      tov: Number(source?.tov) || 0,
+      trueShooting: Number(source?.trueShooting ?? source?.ts) || 56,
+      wins: Number(source?.wins) || 0,
+      games: Number(source?.games) || 0,
+      minutes: Number(source?.minutes ?? source?.min) || 0,
+      usage: Number(source?.usage) || 0,
+      defense
+    };
+  }
+
+  function rankLeagueAward(profiles, awardKey, score, options = {}) {
     if (!profiles.length) return [];
     const history = state.career.league.awardHistory || [];
     const recentWinners = history.slice(-2).map(entry => entry[awardKey]);
     const scored = profiles.map(player => {
       let repeatPenalty = 0;
-      if (recentWinners[recentWinners.length - 1] === player.name) repeatPenalty += 0.45;
-      if (recentWinners[0] === player.name) repeatPenalty += 0.2;
+      if (recentWinners[recentWinners.length - 1] === player.name) repeatPenalty += 0.15;
+      if (recentWinners[0] === player.name) repeatPenalty += 0.05;
       const scoreResult = score(player);
       const scoreValue = typeof scoreResult === 'object' ? scoreResult.total : scoreResult;
-      const scoreNoise = awardKey === 'scoring' ? 0 : randomNormal() * 0.55;
+      const scoreNoise = awardKey === 'scoring' ? 0 : randomNormal() * 0.15;
       const appliedRepeatPenalty = awardKey === 'scoring' ? 0 : repeatPenalty;
       return { ...player, awardBreakdown: typeof scoreResult === 'object' ? scoreResult : null, awardScore: scoreValue - appliedRepeatPenalty + scoreNoise };
+    }).sort((left, right) => right.awardScore - left.awardScore || right.wins - left.wins);
+    return scored.slice(0, Math.max(1, Number(options.limit) || 3));
+  }
+
+  function buildUserMvpStanding(ranking, userEligible, games) {
+    if (!userEligible) return { eligible: false, games, requiredGames: 65 };
+    const index = ranking.findIndex(player => player.isUser);
+    if (index < 0) return { eligible: false, games, requiredGames: 65 };
+    const user = ranking[index];
+    const components = [
+      ['production', '个人产量'], ['efficiency', '得分效率'], ['teamSuccess', '胜场贡献'],
+      ['defense', '防守贡献'], ['availability', '赛季出勤'], ['offensiveLoad', '进攻主导权']
+    ];
+    const comparisons = components.map(([key, label]) => {
+      const values = ranking.map(player => Number(player.awardBreakdown?.[key]) || 0);
+      const average = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+      return { label, delta: (Number(user.awardBreakdown?.[key]) || 0) - average };
     });
-    return SIM.selectAwardFinalists(scored, {
-      limit: 3,
-      maxPerTeam: 3
-    });
+    const strengths = comparisons.filter(item => item.delta >= 0.25).sort((left, right) => right.delta - left.delta).slice(0, 2).map(item => item.label);
+    const gaps = comparisons.filter(item => item.delta <= -0.25).sort((left, right) => left.delta - right.delta).slice(0, 2).map(item => item.label);
+    const third = ranking[2];
+    return {
+      eligible: true,
+      rank: index + 1,
+      score: Math.round(user.awardScore * 10) / 10,
+      winContribution: Number(user.awardBreakdown?.winContribution || 0).toFixed(1),
+      gapToThird: index >= 3 && third ? Math.max(0, Math.round((third.awardScore - user.awardScore) * 10) / 10) : 0,
+      strengths: strengths.length ? strengths : ['表现均衡'],
+      gaps: gaps.length ? gaps : ['无明显短板']
+    };
   }
 
   function awardCandidate(player, type) {
@@ -2539,7 +2590,7 @@
   function buildSeasonAwards() {
     const averages = seasonAverages();
     const defensiveAverage = ['PDEF', 'IDEF', 'BLK', 'REB'].reduce((sum, key) => sum + state.attrs[key], 0) / 4;
-    const profiles = leagueSeasonProfiles();
+    const profiles = leagueSeasonProfiles().map(createAwardProfile);
     const awardEligible = profiles.filter(player => player.games >= 65);
     const scoringEligible = profiles.filter(player => player.games >= 58);
     const mvpPool = awardEligible.length ? awardEligible : profiles;
@@ -2548,17 +2599,21 @@
     const rookiePool = rookies.length ? rookies : profiles.slice().sort((left, right) => left.age - right.age).slice(0, 12);
     const userAvailability = clamp((state.season.playerGames || 0) / 82, 0, 1);
     const userAwardEligible = (state.season.playerGames || 0) >= 65;
-    const userProfile = {
+    const userProfile = createAwardProfile({
+      id: 'user-player',
       name: '我', teamId: state.career.currentTeam, isUser: true, ovr: state.finalOVR, defense: defensiveAverage,
       pts: Number(averages.pts), ast: Number(averages.ast), reb: Number(averages.reb),
       stl: Number(averages.stl), blk: Number(averages.blk), stocks: Number(averages.stl) + Number(averages.blk),
       tov: Number(averages.tov),
       trueShooting: Number(averages.pts) / Math.max(1, 2 * (Number(averages.fga) + Number(averages.fta) * 0.44)) * 100,
       wins: state.season.wins, games: state.season.playerGames || 0, availability: userAvailability,
+      minutes: Number(averages.min),
       usage: state.season.roleProfile?.usage || 25
-    };
+    });
     const mvpProfiles = SIM.allocateWinContributions(userAwardEligible ? [...mvpPool, userProfile] : mvpPool);
-    const mvpRank = rankLeagueAward(mvpProfiles, 'mvp', SIM.calculateMvpScore);
+    const mvpFullRank = rankLeagueAward(mvpProfiles, 'mvp', SIM.calculateMvpScore, { limit: mvpProfiles.length });
+    const mvpRank = mvpFullRank.slice(0, 3);
+    const userMvpStanding = buildUserMvpStanding(mvpFullRank, userAwardEligible, state.season.playerGames || 0);
     const dpoyRank = rankLeagueAward(userAwardEligible ? [...mvpPool, userProfile] : mvpPool, 'dpoy', player => player.defense * 0.9 + player.stocks * 4.5 + player.reb * 0.35 + player.wins * 0.1);
     const scoringEligibleWithUser = (state.season.playerGames || 0) >= 58 ? [...scoringPool, userProfile] : scoringPool;
     const scoringRank = rankLeagueAward(scoringEligibleWithUser, 'scoring', SIM.calculateScoringLeaderScore);
@@ -2579,11 +2634,11 @@
     const userAllNba = allNbaSelections.find(player => player.isUser);
     if (userAllNba) allNba = `最佳阵容${['一', '二', '三'][userAllNba.allNbaTeam - 1]}阵`;
     const awards = [
-      { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), reason: '综合个人产量、效率、进攻主导权和出勤率评定；球队胜场按队内贡献比例守恒分配，同队核心可以同时进入前三。' },
+      { label: '最有价值球员', short: 'MVP', winner: mvp.name, detail: awardCandidate(mvp, 'mvp').detail, isUser: userMVP, candidates: mvpRank.map(player => awardCandidate(player, 'mvp')), userStanding: userMvpStanding, reason: '个人产量、效率、防守和出勤构成基础表现分，再结合个人胜场贡献、球队战绩与进攻主导权评定；同队核心可以同时进入前三。' },
       { label: '最佳防守球员', short: 'DPOY', winner: dpoy.name, detail: awardCandidate(dpoy, 'dpoy').detail, isUser: userDPOY, candidates: dpoyRank.map(player => awardCandidate(player, 'dpoy')), reason: '重点比较防守属性、抢断盖帽、篮板保护和球队胜场。' },
       { label: '年度最佳新秀', short: 'ROTY', winner: rookie.name, detail: awardCandidate(rookie, 'rookie').detail, isUser: userROTY, candidates: rookieRank.map(player => awardCandidate(player, 'rookie')), reason: '仅比较本届新秀的即时能力、数据产量和承担角色。' },
       { label: '常规赛得分王', short: 'SC', winner: scoring.name, detail: awardCandidate(scoring, 'scoring').detail, isUser: userScoring, candidates: scoringRank.map(player => awardCandidate(player, 'scoring')), reason: '以符合出勤门槛后的场均得分为首要依据。' },
-      { label: '我的最佳阵容', recordLabel: '最佳阵容', short: 'ALL', winner: allNba, detail: userAllNba ? `联盟综合表现第 ${userAllNba.allNbaRank} 位 · ${allNba}` : allNba, isUser: Boolean(userAllNba), candidates: [], reason: '采用无位置限制的赛季综合表现榜，比较产量、效率、防守、球队战绩、出勤率与能力稳定性；MVP必入一阵，MVP第二、第三名最低进入二阵。' }
+      { label: '我的最佳阵容', recordLabel: '最佳阵容', short: 'ALL', winner: allNba, detail: userAllNba ? `联盟综合表现第 ${userAllNba.allNbaRank} 位 · ${allNba}` : allNba, isUser: Boolean(userAllNba), candidates: [], reason: '采用无位置限制的赛季综合表现榜，比较产量、效率、防守、球队战绩与出勤率；MVP必入一阵，MVP第二、第三名最低进入二阵。' }
     ];
     state.career.league.awardHistory = STATE.upsertSeasonRecord(state.career.league.awardHistory, {
       seasonNumber: state.career.seasonNumber,
@@ -3951,6 +4006,10 @@
             return `<article class="award-card${award.isUser ? ' is-user' : ''}" style="--award-delay:${index * 90}ms">
               <header><span class="award-code">${award.short}</span><div><small>${award.label}</small><strong>${award.winner}</strong></div>${award.isUser ? '<b>我的荣誉</b>' : ''}</header>
               <div class="award-podium">${candidates.slice(0, 3).map((candidate, rank) => `<div class="${candidate.isUser ? 'is-user' : ''}"><i>${rank + 1}</i><span><b>${candidate.name}</b><small>${candidate.teamId || ''}${Number.isFinite(candidate.score) ? ` · 评选分 ${candidate.score}` : ''}</small></span><p>${candidate.detail}</p></div>`).join('')}</div>
+              ${award.short === 'MVP' && award.userStanding ? (award.userStanding.eligible
+                ? `<div class="mvp-user-standing${award.userStanding.rank <= 3 ? ' is-finalist' : ''}"><div><span>我的MVP排名</span><b>第 ${award.userStanding.rank} 位 · ${award.userStanding.score} 分</b><small>胜场贡献 ${award.userStanding.winContribution}${award.userStanding.rank > 3 ? ` · 距第三 ${award.userStanding.gapToThird} 分` : ' · 进入最终候选'}</small></div><p><span>主要优势：${award.userStanding.strengths.join('、')}</span><span>主要差距：${award.userStanding.gaps.join('、')}</span></p></div>`
+                : `<div class="mvp-user-standing is-ineligible"><div><span>我的MVP排名</span><b>未获得评选资格</b><small>出场 ${award.userStanding.games} 场，至少需要 ${award.userStanding.requiredGames} 场</small></div></div>`)
+                : ''}
               <p class="award-reason"><b>评选依据</b>${award.reason || '依据赛季表现、球队战绩和出勤率综合评定。'}</p>
             </article>`;
           }).join('')}

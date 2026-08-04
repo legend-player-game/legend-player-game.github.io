@@ -1495,6 +1495,32 @@ button.attribute-slot:not(:disabled):hover {
   line-height: 1.35;
 }
 
+.mvp-user-standing {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.75fr) minmax(0, 1.25fr);
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border-left: 3px solid var(--orange);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.mvp-user-standing.is-finalist { border-left-color: var(--gold); }
+.mvp-user-standing.is-ineligible { grid-template-columns: 1fr; }
+.mvp-user-standing span,
+.mvp-user-standing b,
+.mvp-user-standing small { display: block; }
+.mvp-user-standing span,
+.mvp-user-standing small { color: var(--muted); font-size: 9px; }
+.mvp-user-standing b { margin: 2px 0; font-size: 12px; }
+.mvp-user-standing p {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+
 .award-card .award-reason {
   margin-top: 9px;
   color: var(--muted);
@@ -3569,6 +3595,17 @@ button.attribute-slot:not(:disabled):hover {
 
   .modal-decision-actions {
     grid-template-columns: 1fr;
+  }
+
+  .mvp-user-standing {
+    grid-template-columns: 1fr;
+  }
+
+  .mvp-user-standing p {
+    padding-top: 8px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 
   .movement-route {

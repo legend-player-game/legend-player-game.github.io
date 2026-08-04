@@ -329,6 +329,25 @@ test('team wins are conserved while two elite teammates can both become MVP fina
   assert.equal(finalists.filter(player => player.teamId === 'A').length, 2);
 });
 
+test('equal user and CPU award profiles receive equal win contribution', () => {
+  const shared = { teamId: 'A', wins: 50, games: 82, minutes: 35, pts: 28, reb: 7, ast: 8, stl: 1.3, blk: 0.6, tov: 2.8, trueShooting: 61, defense: 86 };
+  const allocated = SIM.allocateWinContributions([
+    { ...shared, id: 'user-player', name: '我', isUser: true },
+    { ...shared, id: 'cpu-player', name: '电脑核心' }
+  ]);
+  assert.equal(allocated[0].winContribution, allocated[1].winContribution);
+  assert.equal(allocated.reduce((sum, player) => sum + player.winContribution, 0), 50);
+});
+
+test('real playing time materially affects allocated win contribution', () => {
+  const shared = { teamId: 'A', wins: 50, games: 82, pts: 28, reb: 7, ast: 8, stl: 1.3, blk: 0.6, tov: 2.8, trueShooting: 61, defense: 86 };
+  const allocated = SIM.allocateWinContributions([
+    { ...shared, id: 'real-minutes', name: '真实时间', minutes: 35 },
+    { ...shared, id: 'missing-minutes', name: '缺失时间' }
+  ]);
+  assert.ok(allocated[0].winContribution > allocated[1].winContribution + 10);
+});
+
 test('roster balance rewards position coverage and penalizes congestion', () => {
   const balanced = ['PG', 'SG', 'SF', 'PF', 'C'].flatMap((pos, index) => [
     { id: `${pos}-1`, pos, positions: [pos], ovr: 88 - index },
@@ -346,6 +365,20 @@ test('All-NBA scoring balances production, efficiency, defense and team success'
   const winningCore = SIM.calculateAllNbaScore({ games: 78, pts: 28, reb: 8, ast: 8, stl: 1.5, blk: 0.8, tov: 3, trueShooting: 62, wins: 56, defense: 88, ovr: 94 });
   const emptyStats = SIM.calculateAllNbaScore({ games: 78, pts: 29, reb: 7, ast: 8, stl: 1, blk: 0.4, tov: 3.5, trueShooting: 57, wins: 38, defense: 76, ovr: 92 });
   assert.ok(winningCore > emptyStats);
+});
+
+test('award scores use season performance rather than overall rating', () => {
+  const season = { games: 80, minutes: 36, usage: 31, pts: 29, reb: 7, ast: 8, stl: 1.4, blk: 0.7, tov: 2.9, trueShooting: 62, wins: 54, defense: 88, winContribution: 12 };
+  assert.equal(SIM.calculateAllNbaScore({ ...season, ovr: 80 }), SIM.calculateAllNbaScore({ ...season, ovr: 99 }));
+  assert.equal(SIM.calculateMvpScore({ ...season, ovr: 80 }).total, SIM.calculateMvpScore({ ...season, ovr: 99 }).total);
+});
+
+test('elite defense adds MVP value without replacing clear offensive dominance', () => {
+  const defender = SIM.calculateMvpScore({ games: 80, usage: 27, pts: 24, reb: 8, ast: 5, stl: 2.2, blk: 1.6, tov: 2.2, trueShooting: 59, wins: 53, defense: 97, winContribution: 11 });
+  const neutralDefense = SIM.calculateMvpScore({ games: 80, usage: 27, pts: 24, reb: 8, ast: 5, stl: 1, blk: 0.5, tov: 2.2, trueShooting: 59, wins: 53, defense: 75, winContribution: 11 });
+  const offensiveLeader = SIM.calculateMvpScore({ games: 80, usage: 34, pts: 32, reb: 7, ast: 10, stl: 1.1, blk: 0.4, tov: 3.2, trueShooting: 63, wins: 53, defense: 80, winContribution: 12 });
+  assert.ok(defender.total > neutralDefense.total + 2);
+  assert.ok(offensiveLeader.total > defender.total);
 });
 
 test('MVP winner is always All-NBA first team and other finalists cannot fall below second team', () => {

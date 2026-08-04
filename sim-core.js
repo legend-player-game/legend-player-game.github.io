@@ -585,37 +585,56 @@
     return { ceiling: 97, level: '联盟顶级', unlocked: current <= 97, qualifyingSeasons: qualifying };
   }
 
-  function calculateMvpScore(player) {
+  function calculateSeasonImpactScore(player) {
     const wins = Number(player?.wins) || 0;
     const games = Math.max(1, Number(player?.games) || 0);
     const availability = clamp(games / 82, 0, 1);
     const pts = Number(player?.pts) || 0;
     const reb = Number(player?.reb) || 0;
     const ast = Number(player?.ast) || 0;
+    const stl = Number(player?.stl) || 0;
+    const blk = Number(player?.blk) || 0;
     const tov = Number(player?.tov) || 0;
-    const trueShooting = Number(player?.trueShooting ?? player?.ts) || 57;
-    const usage = Number(player?.usage) || 25;
-    const production = pts * 0.72 + reb * 0.22 + ast * 0.34 - tov * 0.2;
-    const efficiency = clamp((trueShooting - 52) * 0.28, -2, 4);
-    const winContribution = Number(player?.winContribution);
-    const teamSuccess = Number.isFinite(winContribution)
-      ? winContribution * 1.05 + clamp((wins - 41) * 0.075, -2.2, 2.2)
-      : (wins >= 55 ? 12 + (wins - 55) * 0.32
-        : (wins >= 50 ? 8 + (wins - 50) * 0.8
-          : (wins >= 42 ? (wins - 42) * 0.5 : -(42 - wins) * 0.75)));
-    const ratingStability = Math.max(0, (Number(player?.ovr) || 75) - 80) * 0.12;
-    const offensiveLoad = clamp((usage - 25) * 0.22, -1.5, 4);
-    const availabilityScore = (availability - 0.79) * 8;
-    const belowFiveHundredPenalty = wins < 41 && pts < 34 ? 7 + (41 - wins) * 0.4 : 0;
-    const total = production + efficiency + teamSuccess + ratingStability + offensiveLoad + availabilityScore - belowFiveHundredPenalty;
+    const trueShooting = Number(player?.trueShooting ?? player?.ts) || 56;
+    const defense = Number(player?.defense) || 70;
+    const production = pts * 0.68 + reb * 0.24 + ast * 0.38 + stl * 0.85 + blk * 0.75 - tov * 0.22;
+    const efficiency = clamp((trueShooting - 56) * 0.25, -2.5, 3);
+    const defenseValue = clamp((defense - 75) * 0.06, -0.9, 1.5);
+    const availabilityValue = clamp((availability - 0.79) * 6, -1.5, 1.3);
+    const teamRecord = clamp((wins - 41) * 0.11, -3, 3.3);
+    const total = production + efficiency + defenseValue + availabilityValue + teamRecord;
     return {
       total: Math.round(total * 100) / 100,
       production: Math.round(production * 100) / 100,
       efficiency: Math.round(efficiency * 100) / 100,
-      teamSuccess: Math.round(teamSuccess * 100) / 100,
+      defense: Math.round(defenseValue * 100) / 100,
+      availability: Math.round(availabilityValue * 100) / 100,
+      teamRecord: Math.round(teamRecord * 100) / 100
+    };
+  }
+
+  function calculateMvpScore(player) {
+    const wins = Number(player?.wins) || 0;
+    const pts = Number(player?.pts) || 0;
+    const usage = Number(player?.usage) || 25;
+    const impact = calculateSeasonImpactScore(player);
+    const winContribution = Number(player?.winContribution);
+    const winning = Number.isFinite(winContribution)
+      ? winContribution * 0.9 + impact.teamRecord * 0.6
+      : impact.teamRecord * 2.6;
+    const offensiveLoad = clamp((usage - 25) * 0.12, -1, 2);
+    const belowFiveHundredPenalty = wins < 41 && pts < 34 ? 7 + (41 - wins) * 0.4 : 0;
+    const total = impact.production + impact.efficiency + impact.defense + impact.availability
+      + winning + offensiveLoad - belowFiveHundredPenalty;
+    return {
+      total: Math.round(total * 100) / 100,
+      production: impact.production,
+      efficiency: impact.efficiency,
+      defense: impact.defense,
+      teamSuccess: Math.round(winning * 100) / 100,
+      teamRecord: impact.teamRecord,
       winContribution: Number.isFinite(winContribution) ? Math.round(winContribution * 100) / 100 : null,
-      availability: Math.round(availabilityScore * 100) / 100,
-      ratingStability: Math.round(ratingStability * 100) / 100,
+      availability: impact.availability,
       offensiveLoad: Math.round(offensiveLoad * 100) / 100,
       belowFiveHundredPenalty
     };
@@ -643,24 +662,7 @@
   }
 
   function calculateAllNbaScore(player) {
-    const games = Math.max(1, Number(player?.games) || 0);
-    const availability = clamp(games / 82, 0, 1);
-    const pts = Number(player?.pts) || 0;
-    const reb = Number(player?.reb) || 0;
-    const ast = Number(player?.ast) || 0;
-    const stl = Number(player?.stl) || 0;
-    const blk = Number(player?.blk) || 0;
-    const tov = Number(player?.tov) || 0;
-    const wins = Number(player?.wins) || 0;
-    const trueShooting = Number(player?.trueShooting ?? player?.ts) || 56;
-    const defense = Number(player?.defense) || 70;
-    const production = pts * 0.78 + reb * 0.3 + ast * 0.42 + stl * 0.95 + blk * 0.9 - tov * 0.28;
-    const efficiency = clamp((trueShooting - 54) * 0.22, -2.2, 3.3);
-    const teamSuccess = clamp((wins - 41) * 0.13, -2.6, 3.4);
-    const defenseValue = clamp((defense - 72) * 0.055, -0.8, 1.5);
-    const availabilityValue = clamp((availability - 0.79) * 5, -1.5, 1.1);
-    const ratingStability = clamp(((Number(player?.ovr) || 75) - 80) * 0.08, -0.8, 1.5);
-    return Math.round((production + efficiency + teamSuccess + defenseValue + availabilityValue + ratingStability) * 100) / 100;
+    return calculateSeasonImpactScore(player).total;
   }
 
   function selectAllNbaTeams(players, { mvpFinalists = [] } = {}) {
@@ -1016,6 +1018,7 @@
     contractMarketValue,
     calculateStatProfile,
     historicalAttributeCeiling,
+    calculateSeasonImpactScore,
     calculateMvpScore,
     calculateScoringLeaderScore,
     calculateFinalsMvpScore,
