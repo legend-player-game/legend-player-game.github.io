@@ -1038,14 +1038,14 @@
     const seasonScore = seasons.reduce((total, season) => {
       const games = Math.max(0, Number(season.games) || 0);
       const availability = clamp(games / 82, 0, 1);
-      const ovr = Number(season.ovr) || 60;
       const averages = season.averages || season;
       const pts = Number(averages.pts) || 0;
       const reb = Number(averages.reb) || 0;
       const ast = Number(averages.ast) || 0;
       const wins = Number(season.wins) || 0;
-      const quality = clamp((ovr - 70) / 25, 0, 1) * 8;
-      const production = clamp((pts + reb * 0.55 + ast * 0.75 - 10) / 30, 0, 1) * 8;
+      const minutes = Number(averages.min ?? season.minutes) || 0;
+      const quality = clamp((minutes - 12) / 24, 0, 1) * 4;
+      const production = clamp((pts + reb * 0.55 + ast * 0.75 - 10) / 30, 0, 1) * 10;
       const winning = clamp((wins - 40) * 0.2, 0, 6);
       return total + (quality + production + winning) * availability;
     }, 0);
@@ -1064,8 +1064,10 @@
     let championshipPoints = 0;
     seasons.filter(season => season.champion).forEach((season, index) => {
       const minutes = Number(season.averages?.min ?? season.minutes) || 0;
-      const ovr = Number(season.ovr) || 60;
-      const roleFactor = minutes >= 28 || ovr >= 86 ? 1 : (minutes >= 18 || ovr >= 78 ? 0.65 : 0.35);
+      const hasExplicitCoreStatus = typeof season.coreChampionship === 'boolean';
+      const roleFactor = hasExplicitCoreStatus
+        ? (season.coreChampionship ? 1 : (minutes >= 18 ? 0.5 : 0.3))
+        : (minutes >= 28 ? 1 : (minutes >= 18 ? 0.65 : 0.35));
       if (roleFactor === 1) coreChampionships += 1;
       const titleValue = titleValues[Math.min(index, titleValues.length - 1)];
       championshipPoints += titleValue * roleFactor;
@@ -1161,6 +1163,98 @@
     return { probability: Math.round(clamp(probability, 0, 0.99) * 1000) / 1000, guaranteed, reasons };
   }
 
+  function calculatePostseasonContribution(stats = {}, context = {}) {
+    const games = Math.max(0, Number(stats.games) || 0);
+    const teamGames = Math.max(1, Number(context.teamGames) || games || 1);
+    const minutes = Number(stats.min ?? stats.minutes) || 0;
+    const fgPct = Number(stats.fgPct) || 0;
+    const base = (Number(stats.pts) || 0)
+      + (Number(stats.reb) || 0) * 0.7
+      + (Number(stats.ast) || 0) * 0.9
+      + (Number(stats.stl) || 0) * 1.5
+      + (Number(stats.blk) || 0) * 1.4
+      - (Number(stats.tov) || 0) * 0.8;
+    const efficiency = clamp((fgPct - 46) * 0.18, -2.5, 2.5);
+    const attendance = clamp(games / teamGames, 0, 1);
+    const attendanceValue = (attendance - 0.6) * 3;
+    const winValue = Math.max(0, Number(context.teamWins) || 0) * clamp(minutes / 36, 0.35, 1.15) * 0.16;
+    return Math.round((base + efficiency + attendanceValue + winValue) * 100) / 100;
+  }
+
+  function selectChampionshipCores(players = [], options = {}) {
+    const teamGames = Math.max(1, Number(options.teamGames) || 1);
+    const teamWins = Math.max(0, Number(options.teamWins) || 0);
+    const finalists = players.map(player => ({
+      ...player,
+      contribution: calculatePostseasonContribution(player, { teamGames, teamWins })
+    })).sort((left, right) => right.contribution - left.contribution);
+    const fmvp = finalists.find(player => player.id === options.finalsMvpId) || null;
+    const cores = fmvp ? [{ ...fmvp, coreRole: 'FMVP' }] : [];
+    const leaderScore = Math.max(0.01, fmvp?.contribution || finalists[0]?.contribution || 0.01);
+    const second = finalists.find(player => player.id !== fmvp?.id
+      && (Number(player.min ?? player.minutes) || 0) >= 28
+      && (Number(player.games) || 0) >= teamGames * 0.6
+      && player.contribution >= leaderScore * 0.65);
+    if (second) cores.push({ ...second, coreRole: '季后赛第二贡献者' });
+    return cores.slice(0, 2);
+  }
+
+  function calculateCareerMovementPenalty(career = {}) {
+    const history = Array.isArray(career.history) ? career.history : [];
+    const transactions = Array.isArray(career.transactions) ? career.transactions : [];
+    const activeMoves = transactions.filter(event => (
+      (event.type === '申请交易' && event.approved !== false)
+      || (event.type === '自由签约' && event.activeDeparture !== false && event.teamId && event.teamId !== event.fromTeamId)
+    ));
+    let penalty = [0, 0, 1.5, 4, 7.5][Math.min(activeMoves.length, 4)] || 0;
+    if (activeMoves.length >= 5) penalty = 7.5 + (activeMoves.length - 4) * 4;
+    const hardlineMoves = activeMoves.filter(event => event.hardline).length;
+    const hardlineFailures = transactions.filter(event => event.type === '强硬交易申请失败').length;
+    penalty += hardlineMoves + hardlineFailures * 2.5;
+    activeMoves.forEach(event => {
+      if (Number(event.destinationLeagueRank) > 0 && Number(event.destinationLeagueRank) <= 4) penalty += 1;
+      const departureSeason = Number(event.season) || 0;
+      const recentTitle = history.some(season => season.champion && season.teamId === event.fromTeamId
+        && departureSeason - Number(season.seasonNumber) >= 0 && departureSeason - Number(season.seasonNumber) <= 2);
+      if (recentTitle) penalty += 1.5;
+    });
+    const shortContenderMoves = activeMoves.filter(event => Number(event.years) <= 2 && event.destinationPhase === '争冠').length;
+    penalty += Math.min(2, Math.max(0, shortContenderMoves - 1));
+    const capRank = activeMoves.length >= 5 ? 30 : (activeMoves.length === 4 ? 15 : (activeMoves.length === 3 ? 10 : null));
+    return {
+      activeMoves: activeMoves.length,
+      penalty: Math.min(15, Math.round(penalty * 10) / 10),
+      capRank,
+      hardlineMoves,
+      hardlineFailures
+    };
+  }
+
+  function selectCommunityCritique(career = {}, legacy = {}) {
+    if (legacy.tier?.key === 'unique') return null;
+    const totals = career.totals || {};
+    const awards = career.awardCounts || {};
+    const movement = legacy.movement || calculateCareerMovementPenalty(career);
+    const championships = Number(career.championships) || 0;
+    const coreChampionships = Number(legacy.coreChampionships) || 0;
+    const playoffTrips = (career.history || []).filter(season => !/无缘/.test(String(season.postseason))).length;
+    const firstRoundExits = (career.history || []).filter(season => /首轮/.test(String(season.postseason))).length;
+    if (legacy.tier?.key === 'top3') return { title: '王座候场区', text: '已经坐到历史第一排，可惜中间那把椅子还写着别人的名字。' };
+    if (legacy.tier?.key === 'top5') return { title: '乔丹比较器', text: '每项履历都够拿来比较，合在一起还是差了那句公认第一。' };
+    if (legacy.tier?.key === 'top10') return { title: '守门员本尊', text: '讨论历史前十时一定会提到他，主要用于决定谁该被踢出去。' };
+    if (movement.activeMoves >= 3 && championships >= 2) return { title: '游牧王朝', text: '冠军旗帜挂了不少，可惜每一面下面都是不同的门牌号。' };
+    if (movement.activeMoves >= 4) return { title: '联盟巡回展览', text: '球衣退役仪式最大的难题，是不知道该穿哪一件出席。' };
+    if ((Number(totals.pts) || 0) >= 40000 && (Number(totals.reb) || 0) >= 10000 && (Number(totals.ast) || 0) >= 10000 && coreChampionships < 3) return { title: '最长的河', text: '职业生涯流了二十年，水量很大，奖杯还是得靠显微镜找。' };
+    if (championships >= 2 && coreChampionships === 0) return { title: '冠军拼图收藏家', text: '戒指确实不少，夺冠纪录片里的镜头不太够剪。' };
+    if ((awards['最有价值球员'] || 0) >= 1 && championships === 0) return { title: '常规赛限定皮肤', text: '四月以前是联盟门面，五月以后是付费观众。' };
+    if ((Number(totals.pts) || 0) >= 30000 && championships === 0) return { title: '无冕数据王', text: '得分、篮板、助攻全都留下了，只有冠军选择保护隐私。' };
+    if ((career.teamsPlayed || []).length === 1 && (career.history || []).length >= 12 && championships === 0) return { title: '一人一城，一城无冠', text: '忠诚经得起时间考验，争冠能力也一样稳定。' };
+    if (playoffTrips >= 4 && firstRoundExits >= Math.ceil(playoffTrips * 0.6)) return { title: '首轮体验官', text: '每年都能准时参加季后赛，也能准时开始休假。' };
+    if ((career.history || []).length <= 4 || (legacy.careerPpg || 0) < 5) return { title: '联盟限时体验卡', text: '生涯总结刚写完开头，联盟已经替他补上了句号。' };
+    if (legacy.score >= 75 && coreChampionships === 0) return { title: 'Excel历史第一人', text: '只要筛选条件足够复杂，他就永远是历史第一。' };
+    return { title: '篮球史脚注', text: '履历不是完全没内容，只是翻到这一页的人通常已经开始走神。' };
+  }
+
   function calculateCareerLegacy(career) {
     const history = Array.isArray(career?.history) ? career.history : [];
     const totals = career?.totals || {};
@@ -1172,34 +1266,40 @@
     const scoringTitles = awards['常规赛得分王'] || 0;
     const rookieAwards = awards['年度最佳新秀'] || 0;
     const championships = career?.championships || 0;
-    const peakOvr = Number(career?.peakOVR) || 60;
+    const coreChampionships = history.filter(season => season.coreChampionship).length;
     const totalGames = Number(career?.totalGames) || 0;
     const seasonCount = Math.max(1, history.length);
     const careerPpg = totalGames > 0 ? (Number(totals.pts) || 0) / totalGames : 0;
     const careerMpg = totalGames > 0
       ? history.reduce((sum, season) => sum + (Number(season.averages?.min) || 0) * (Number(season.games) || 0), 0) / totalGames
       : 0;
-    const topFiveOvr = history.slice().sort((left, right) => right.ovr - left.ovr).slice(0, 5)
-      .reduce((sum, season) => sum + season.ovr, 0) / Math.max(1, Math.min(5, history.length));
-    const peakRating = ratingFromMilestones(peakOvr, [[0, 0], [75, 10], [80, 25], [85, 45], [90, 65], [95, 82], [99, 94]]);
-    const topFiveRating = ratingFromMilestones(topFiveOvr, [[0, 0], [75, 8], [80, 22], [85, 42], [90, 63], [95, 80], [99, 92]]);
-    const peakDominance = clamp(Math.round(peakRating * 0.72 + topFiveRating * 0.18 + Math.min(10, mvp * 4 + scoringTitles * 1.5)), 0, 100);
-    const personalHonors = clamp(Math.round(mvp * 22 + finalsMvp * 12 + dpoy * 14 + allNba * 7 + scoringTitles * 5 + rookieAwards * 2), 0, 100);
+    const seasonImpact = history.map(season => {
+      const averages = season.averages || {};
+      const production = (Number(averages.pts) || 0) + (Number(averages.reb) || 0) * 0.55 + (Number(averages.ast) || 0) * 0.75
+        + (Number(averages.stl) || 0) * 1.6 + (Number(averages.blk) || 0) * 1.5 - (Number(averages.tov) || 0) * 0.45;
+      return production + Math.max(0, (Number(season.wins) || 0) - 41) * 0.12 + (season.awards || []).filter(label => label === '最有价值球员').length * 8;
+    }).sort((left, right) => right - left);
+    const peakAverage = seasonImpact.slice(0, 5).reduce((sum, value) => sum + value, 0) / Math.max(1, Math.min(5, seasonImpact.length));
+    const peakDominance = clamp(Math.round(ratingFromMilestones(peakAverage, [[0, 0], [18, 18], [25, 38], [32, 58], [40, 78], [48, 94], [55, 100]])), 0, 100);
+    const personalHonors = clamp(Math.round(mvp * 18 + finalsMvp * 13 + dpoy * 11 + allNba * 4 + scoringTitles * 4 + rookieAwards * 2), 0, 100);
     const finalsAppearances = history.filter(season => season.champion || String(season.postseason).includes('总决赛')).length;
     const deepRuns = history.filter(season => String(season.postseason).includes('分区决赛')).length;
-    const winningResume = clamp(Math.round(championships * 25 + Math.max(0, finalsAppearances - championships) * 8 + deepRuns * 3 + history.filter(season => season.wins >= 50).length * 1.5), 0, 100);
+    const winningResume = clamp(Math.round(coreChampionships * 28 + Math.max(0, championships - coreChampionships) * 7 + Math.max(0, finalsAppearances - championships) * 6 + deepRuns * 2), 0, 100);
     const productionRatings = [
       ratingFromMilestones(totals.pts, [[0, 0], [10000, 25], [20000, 55], [30000, 80], [40000, 100]]),
       ratingFromMilestones(totals.reb, [[0, 0], [5000, 25], [10000, 55], [15000, 78], [20000, 100]]),
       ratingFromMilestones(totals.ast, [[0, 0], [3000, 25], [7000, 55], [10000, 78], [14000, 100]])
     ].sort((left, right) => right - left);
     const careerProduction = Math.round(productionRatings[0] * 0.55 + productionRatings[1] * 0.3 + productionRatings[2] * 0.15);
-    const qualityUnits = history.reduce((sum, season) => (
-      sum + (Number(season.games) || 0) / 82 * clamp(((Number(season.ovr) || 60) - 72) / 23, 0, 1)
-    ), 0);
+    const qualityUnits = history.reduce((sum, season) => {
+      const averages = season.averages || {};
+      const impact = (Number(averages.pts) || 0) + (Number(averages.reb) || 0) * 0.45 + (Number(averages.ast) || 0) * 0.65;
+      return sum + (Number(season.games) || 0) / 82 * clamp((impact - 10) / 30, 0, 1);
+    }, 0);
     const qualityLongevity = clamp(qualityUnits / 15 * 70, 0, 70);
     const availability = clamp(totalGames / (seasonCount * 82), 0, 1) * 18;
-    const latePrime = Math.min(12, history.filter(season => season.age >= 33 && season.ovr >= 85 && season.games >= 58).length * 2);
+    const latePrime = Math.min(12, history.filter(season => season.age >= 33 && season.games >= 58
+      && ((Number(season.averages?.pts) || 0) + (Number(season.averages?.reb) || 0) * 0.45 + (Number(season.averages?.ast) || 0) * 0.65) >= 24).length * 2);
     const longevity = clamp(Math.round(qualityLongevity + availability + latePrime), 0, 100);
     const dimensions = {
       '巅峰统治': peakDominance,
@@ -1208,29 +1308,59 @@
       '生涯产量': careerProduction,
       '持久稳定': longevity
     };
-    const rawScore = Math.round(peakDominance * 0.26 + personalHonors * 0.25 + winningResume * 0.16 + careerProduction * 0.18 + longevity * 0.15);
-    let score = rawScore;
+    const rawScore = Math.round(peakDominance * 0.25 + personalHonors * 0.25 + winningResume * 0.25 + careerProduction * 0.15 + longevity * 0.1);
+    let bestLeagueLeadStreak = 0;
+    let currentLeagueLeadStreak = 0;
+    history.forEach(season => {
+      const ledLeague = Number(season.mvpStanding?.rank) === 1 || (season.awards || []).includes('最有价值球员');
+      currentLeagueLeadStreak = ledLeague ? currentLeagueLeadStreak + 1 : 0;
+      bestLeagueLeadStreak = Math.max(bestLeagueLeadStreak, currentLeagueLeadStreak);
+    });
+    const rivalryWins = {};
+    history.forEach(season => (season.series || []).filter(series => series.won && series.opponent).forEach(series => {
+      rivalryWins[series.opponent] = (rivalryWins[series.opponent] || 0) + 1;
+    }));
+    const repeatedRivalBonus = Object.values(rivalryWins).some(wins => wins >= 3) ? 1 : 0;
+    const bonus = Math.min(8,
+      Math.max(0, mvp - 3) * 0.7 + Math.max(0, finalsMvp - 3) * 0.8 + Math.max(0, coreChampionships - 4) * 0.8
+      + ((Number(totals.pts) || 0) >= 40000 ? 1 : 0)
+      + ((Number(totals.pts) || 0) >= 40000 && (Number(totals.reb) || 0) >= 10000 && (Number(totals.ast) || 0) >= 10000 ? 1.5 : 0)
+      + (((Number(totals.pts) || 0) >= 50000 || (Number(totals.reb) || 0) >= 20000 || (Number(totals.ast) || 0) >= 14000) ? 2 : 0)
+      + (bestLeagueLeadStreak >= 5 ? 1.5 : 0)
+      + repeatedRivalBonus
+      + ((career.teamsPlayed || []).length === 1 && history.length >= 15 && coreChampionships ? 1 : 0));
+    const movement = calculateCareerMovementPenalty(career);
+    let score = Math.round(clamp(rawScore + bonus - movement.penalty, 0, 100));
     if (!allNba && !mvp && !dpoy && !championships) score = Math.min(score, 49);
     if (!mvp && !dpoy && !championships) score = Math.min(score, 67);
     if (!mvp && !championships) score = Math.min(score, 76);
-    const majorAwards = mvp + dpoy;
-    const tiers = [
-      { threshold: 95, title: '历史王座候选', rank: '历史前 3 讨论', top30: true, eligible: mvp >= 3 && championships >= 3 && allNba >= 12 && peakOvr >= 96 },
-      { threshold: 89, title: '不朽传奇', rank: '历史前 10 级别', top30: true, eligible: mvp >= 2 && championships >= 2 && allNba >= 10 },
-      { threshold: 83, title: '时代统治者', rank: '历史前 25 级别', top30: true, eligible: (mvp >= 2 || (mvp >= 1 && championships >= 1)) && allNba >= 8 },
-      { threshold: 76, title: '名人堂超级巨星', rank: '历史前 50 级别', eligible: ((majorAwards >= 1 && championships >= 1) || mvp >= 2) && allNba >= 6 },
-      { threshold: 68, title: '名人堂巨星', rank: '历史前 75 讨论', eligible: allNba >= 7 && (majorAwards >= 1 || championships >= 1) },
-      { threshold: 58, title: '名人堂球星', rank: '名人堂级别（非历史前 75）', eligible: allNba >= 4 || majorAwards >= 1 || championships >= 1 },
-      { threshold: 50, title: '多届最佳阵容球员', rank: '时代代表球星', eligible: allNba >= 2 || majorAwards >= 1 },
-      { threshold: 42, title: '全明星级生涯', rank: '有过高光，离历史前列还有几个档位', eligible: seasonCount >= 5 && (allNba >= 1 || peakOvr >= 90) },
-      { threshold: 34, title: '球队核心', rank: '能扛一段时间的球权，扛不起历史讨论', eligible: seasonCount >= 6 && totalGames >= 350 && (careerPpg >= 15 || peakOvr >= 88) },
-      { threshold: 24, title: '合格首发', rank: '首发履历够用，退役巡演就先省了', eligible: totalGames >= 350 && careerMpg >= 24 },
-      { threshold: 14, title: '稳定轮换球员', rank: '轮换里有位置，历史榜单里没有', eligible: seasonCount >= 5 && totalGames >= 220 && (careerMpg >= 15 || careerPpg >= 6) },
-      { threshold: 7, title: '联盟边缘球员', rank: '名单上出现过，比赛里不一定找得到', eligible: totalGames >= 50 },
-      { threshold: 0, title: '未能站稳联盟', rank: '短暂联盟经历，生涯比重建计划结束得更早', eligible: true }
+    const hardScore = coreChampionships * 12 + finalsMvp * 8 + mvp * 5;
+    const hardTiers = [
+      { key: 'unique', title: '历史唯一', rank: '历史唯一档', rankNumber: 1, eligible: coreChampionships >= 7 && finalsMvp >= 7 && hardScore >= 155 },
+      { key: 'top3', title: '篮球史王座候选', rank: '历史前 3', rankNumber: 3, eligible: coreChampionships >= 5 && finalsMvp >= 2 && hardScore >= 115 },
+      { key: 'top5', title: '不朽统治者', rank: '历史前 5', rankNumber: 5, eligible: coreChampionships >= 4 && finalsMvp >= 2 && hardScore >= 94 },
+      { key: 'top10', title: '历史级超巨', rank: '历史前 10', rankNumber: 10, eligible: coreChampionships >= 3 && finalsMvp >= 1 && hardScore >= 65 }
     ];
-    const tier = tiers.find(item => score >= item.threshold && item.eligible) || tiers[tiers.length - 1];
-    return { score, rawScore, dimensions, tier, productionRatings, qualityUnits, careerPpg, careerMpg, seasonCount, totalGames };
+    const scoreTiers = [
+      { key: 'top15', threshold: 92, title: '时代巅峰', rank: '历史前 15 讨论', rankNumber: 15, top30: true },
+      { key: 'top25', threshold: 86, title: '不朽传奇', rank: '历史前 25', rankNumber: 25, top30: true },
+      { key: 'top30', threshold: 80, title: '时代统治者', rank: '历史前 30', rankNumber: 30, top30: true },
+      { key: 'top50', threshold: 72, title: '名人堂超级巨星', rank: '历史前 50', rankNumber: 50 },
+      { key: 'top75', threshold: 64, title: '名人堂巨星', rank: '历史前 75', rankNumber: 75 },
+      { key: 'hof', threshold: 55, title: '名人堂球星', rank: '名人堂级别', rankNumber: 100 },
+      { key: 'era', threshold: 45, title: '时代代表', rank: '时代代表球星', rankNumber: 150 },
+      { key: 'core', threshold: 35, title: '球队核心', rank: '球队核心级别', rankNumber: 250 },
+      { key: 'starter', threshold: 24, title: '合格首发', rank: '合格首发', rankNumber: 400 },
+      { key: 'rotation', threshold: 14, title: '稳定轮换', rank: '稳定轮换球员', rankNumber: 600 },
+      { key: 'fringe', threshold: 0, title: '未能站稳联盟', rank: '边缘或失败生涯', rankNumber: 999 }
+    ];
+    let tier = hardTiers.find(item => item.eligible) || scoreTiers.find(item => score >= item.threshold) || scoreTiers[scoreTiers.length - 1];
+    if (movement.capRank && tier.rankNumber < movement.capRank) {
+      tier = scoreTiers.find(item => item.rankNumber >= movement.capRank) || scoreTiers[scoreTiers.length - 1];
+    }
+    const result = { score, rawScore, bonus: Math.round(bonus * 10) / 10, dimensions, tier, productionRatings, qualityUnits, careerPpg, careerMpg, seasonCount, totalGames, coreChampionships, hardScore, movement };
+    result.critique = selectCommunityCritique(career, result);
+    return result;
   }
 
   function calculateCareerTitles(career, legacy = calculateCareerLegacy(career)) {
@@ -1241,20 +1371,22 @@
     const mvp = awards['最有价值球员'] || 0;
     const allNba = awards['最佳阵容'] || 0;
     const championships = career?.championships || 0;
+    const coreChampionships = legacy.coreChampionships || 0;
     const deepRuns = history.filter(season => season.champion || /总决赛|分区决赛/.test(String(season.postseason))).length;
-    const latePrime = history.filter(season => season.age >= 33 && season.ovr >= 85 && season.games >= 58).length;
+    const latePrime = history.filter(season => season.age >= 33 && season.games >= 58
+      && ((Number(season.averages?.pts) || 0) + (Number(season.averages?.reb) || 0) * 0.45 + (Number(season.averages?.ast) || 0) * 0.65) >= 24).length;
     const definitions = [
       {
         title: '联盟门面',
-        achieved: mvp >= 2 && allNba >= 8 && (career?.peakOVR || 0) >= 95,
-        reason: `${mvp} 次 MVP、${allNba} 次最佳阵容，巅峰 ${career?.peakOVR || 0} OVR`,
-        requirement: '至少2次MVP、8次最佳阵容且巅峰达到95 OVR'
+        achieved: mvp >= 2 && allNba >= 8,
+        reason: `${mvp} 次 MVP、${allNba} 次最佳阵容`,
+        requirement: '至少2次MVP和8次最佳阵容'
       },
       {
         title: '冠军核心',
-        achieved: championships >= 1 && ((career?.peakOVR || 0) >= 88 || allNba >= 2),
-        reason: `${championships} 次夺冠，巅峰 ${career?.peakOVR || 0} OVR`,
-        requirement: '以核心能力赢得至少1次总冠军'
+        achieved: coreChampionships >= 1,
+        reason: `${championships} 次夺冠，其中 ${coreChampionships} 次被认定为冠军核心`,
+        requirement: '以FMVP或季后赛第二贡献者身份赢得至少1次总冠军'
       },
       {
         title: '无冕之王',
@@ -1294,7 +1426,9 @@
       }
     ];
     const achieved = definitions.filter(item => item.achieved);
-    const next = definitions.find(item => !item.achieved) || null;
+    const next = legacy.tier?.key === 'unique'
+      ? null
+      : definitions.find(item => !item.achieved && !(item.title === '无冕之王' && championships > 0)) || null;
     return { achieved, next, definitions };
   }
 
@@ -1361,6 +1495,10 @@
     calculateFranchiseLegacyScore,
     calculateFranchiseStanding,
     calculateMotherTeamRetention,
+    calculatePostseasonContribution,
+    selectChampionshipCores,
+    calculateCareerMovementPenalty,
+    selectCommunityCritique,
     calculateCareerLegacy,
     calculateCareerTitles,
     auditLeague

@@ -17,7 +17,7 @@
   const LEGACY_SAVE_KEYS = ['build-a-player-save-v6', 'build-a-player-save-v5', 'build-a-player-save-v4', 'build-a-player-save-v3'];
   const SAVE_SCHEMA_VERSION = 7;
   const HONOR_KEY = 'build-a-player-honors-v1';
-  const UPDATE_ANNOUNCEMENT_KEY = 'build-a-player-update-20260805-01';
+  const UPDATE_ANNOUNCEMENT_KEY = 'build-a-player-update-20260805-02';
   const CAREER_SEASONS = 20;
   const CAREER_START_AGE = 18;
   const POSITION_ARCHETYPES = {
@@ -298,6 +298,30 @@
     state.career.awardCounts = {};
     state.career.championships = 0;
     state.career.teamsPlayed = ['IND'];
+    state.season.stage = 'career-complete';
+    renderSeason();
+  }
+
+  function activateHighLegacyDebugState() {
+    state = buildDebugCareerState(20);
+    const perSeason = { pts: 2520, reb: 760, ast: 820, stl: 132, blk: 58, tov: 230, fgm: 900, fga: 1780, tpm: 260, tpa: 650, ftm: 460, fta: 520, min: 2940 };
+    state.career.history = Array.from({ length: 20 }, (_, index) => ({
+      seasonNumber: index + 1, age: 18 + index, teamId: 'OKC', games: 82, wins: 58, losses: 24,
+      totals: { ...perSeason }, averages: averagesFromTotals(perSeason, 82),
+      awards: [...(index < 6 ? ['最有价值球员'] : []), '最佳阵容'],
+      champion: index < 7, coreChampionship: index < 7,
+      championshipCores: index < 7 ? [{ id: 'user-player', name: '我', role: 'FMVP', contribution: 48 }] : [],
+      finalsMvp: index < 7 ? { id: 'user-player', name: '我', isUser: true } : null,
+      postseason: index < 7 ? '总冠军' : '分区决赛止步', series: []
+    }));
+    state.career.totals = Object.fromEntries(Object.entries(perSeason).map(([key, value]) => [key, value * 20]));
+    state.career.totalGames = 1640;
+    state.career.awardCounts = { '最有价值球员': 6, '总决赛最有价值球员': 7, '最佳阵容': 20 };
+    state.career.championships = 7;
+    state.career.teamsPlayed = ['OKC'];
+    state.career.age = 38;
+    state.career.retirementAge = 38;
+    state.career.completed = true;
     state.season.stage = 'career-complete';
     renderSeason();
   }
@@ -3102,6 +3126,18 @@
       .filter(award => award.isUser)
       .map(award => STATE.canonicalAwardLabel(award.recordLabel || award.label));
     const mvpStanding = state.season.awards.find(award => award.label === '最有价值球员')?.userStanding || null;
+    const playoffTeamGames = (state.season.series || []).reduce((sum, series) => sum + (series.games?.length || 0), 0);
+    const playoffTeamWins = (state.season.series || []).reduce((sum, series) => sum + (series.games || []).filter(game => game.won).length, 0);
+    const postseasonPlayers = Object.values(state.season.postseasonPlayerStats || {})
+      .filter(player => player.teamId === state.careerTeam && player.games > 0)
+      .map(player => ({ ...player, ...averagesFromTotals(player.totals, player.games) }));
+    const championshipCores = state.season.champion
+      ? SIM.selectChampionshipCores(postseasonPlayers, {
+        teamGames: playoffTeamGames,
+        teamWins: playoffTeamWins,
+        finalsMvpId: state.season.finalsMvp?.id
+      })
+      : [];
     const entry = {
       seasonNumber: state.career.seasonNumber,
       seasonYear: state.career.startYear + state.career.seasonNumber - 1,
@@ -3123,11 +3159,27 @@
       awards: earnedAwards,
       mvpStanding: mvpStanding ? { ...mvpStanding } : null,
       champion: state.season.champion,
+      coreChampionship: championshipCores.some(player => player.id === 'user-player'),
+      championshipCores: championshipCores.map(player => ({
+        id: player.id, name: player.name, role: player.coreRole, contribution: player.contribution
+      })),
       postseason: seasonResultLabel(),
+      series: (state.season.series || []).map(series => ({
+        label: series.label, opponent: series.opponent, won: series.won, score: series.score,
+        games: (series.games || []).map(game => ({ ...game }))
+      })),
       finalsMvp: state.season.finalsMvp ? { ...state.season.finalsMvp } : null,
       postseasonStats: state.season.postseasonPlayerStats?.['user-player']
         ? averagesFromTotals(state.season.postseasonPlayerStats['user-player'].totals, state.season.postseasonPlayerStats['user-player'].games)
-        : null
+        : null,
+      postseasonLeaders: postseasonPlayers
+        .map(player => ({
+          id: player.id, name: player.name, isUser: player.isUser, games: player.games,
+          pts: player.pts, reb: player.reb, ast: player.ast, stl: player.stl, blk: player.blk,
+          tov: player.tov, min: player.min, fgPct: player.fgPct,
+          contribution: SIM.calculatePostseasonContribution(player, { teamGames: playoffTeamGames, teamWins: playoffTeamWins })
+        }))
+        .sort((left, right) => right.contribution - left.contribution).slice(0, 5)
     };
     state.career.history.push(entry);
     state.career.totalGames += games;
@@ -3301,6 +3353,10 @@
     const userValue = SIM.tradeValue(userPlayer);
     const counterpartValue = SIM.tradeValue(matched);
     const fitDescription = tradeFitDescription(candidate);
+    const destinationRecord = league.teamRecords?.[targetTeamId] || { wins: 41 };
+    const destinationLeagueRank = Object.entries(league.teamRecords || {})
+      .sort((left, right) => right[1].wins - left[1].wins)
+      .findIndex(([teamId]) => teamId === targetTeamId) + 1;
     matched.teamId = oldTeamId;
     state.career.currentTeam = targetTeamId;
     syncUserLeaguePlayer();
@@ -3342,6 +3398,8 @@
       originalTeamFitDelta: candidate.oldTeamFit?.delta || 0,
       destinationFitDelta: candidate.targetFit?.delta || 0,
       destinationCongestion: candidate.targetCongestion || 0,
+      destinationLeagueRank: destinationLeagueRank || 30,
+      destinationPhase: destinationRecord.wins >= 49 ? '争冠' : (destinationRecord.wins >= 40 ? '冲击季后赛' : '重建'),
       projectedMinutes: candidate.targetProjection?.minutes,
       projectedRole: candidate.targetProjection?.role,
       fitDescription,
@@ -3403,6 +3461,7 @@
     const offer = pending.offers.find(item => item.teamId === teamId);
     if (!offer) return;
     const oldTeamId = state.career.currentTeam;
+    const motherTeamOffered = pending.offers.some(item => item.teamId === oldTeamId);
     const previousContractNumber = state.career.contract?.number ?? ((state.career.completedContracts ?? 0) + 1);
     state.career.completedContracts = (state.career.completedContracts ?? 0) + 1;
     state.career.currentTeam = teamId;
@@ -3428,6 +3487,11 @@
       annualSalary: offer.annualSalary,
       projectedMinutes: offer.projection.minutes,
       projectedRole: offer.projection.role,
+      destinationLeagueRank: Object.entries(ensureLeagueState().teamRecords || {})
+        .sort((left, right) => right[1].wins - left[1].wins)
+        .findIndex(([candidateTeamId]) => candidateTeamId === teamId) + 1,
+      destinationPhase: offer.phase,
+      activeDeparture: teamId === oldTeamId ? false : motherTeamOffered,
       text: `${teamId === oldTeamId ? '与母队续约' : `签约${DATA.getTeam(teamId).name}`} ${offer.years} 年、年薪 $${offer.annualSalary}M，预计担任${offer.projection.role}`
     };
     state.career.transactions.push({ ...movement, season: state.career.seasonNumber + 1, age: pending.nextAge });
@@ -3622,61 +3686,54 @@
   function careerStanding() {
     const career = state.career;
     const awards = career.awardCounts;
-    const average = careerAverages();
     const totals = career.totals;
     const mvp = awards['最有价值球员'] || 0;
     const dpoy = awards['最佳防守球员'] || 0;
     const allNba = awards['最佳阵容'] || 0;
-    const scoringTitles = awards['常规赛得分王'] || 0;
-    const highLevelSeasons = career.history.filter(entry => entry.ovr >= 85).length;
     const legacy = SIM.calculateCareerLegacy(career);
     const dimensions = legacy.dimensions;
     const score = legacy.score;
     const tier = legacy.tier;
     const titleEvaluation = SIM.calculateCareerTitles(career, legacy);
     const badges = titleEvaluation.achieved.map(item => item.title);
-    if (tier.title === '历史王座候选') badges.push('王座挑战者');
-    if (career.championships >= 3) badges.push('王朝缔造者');
-    else if (career.championships >= 1) badges.push('冠军核心');
+    if (tier.key === 'unique') badges.push('历史唯一');
+    if (legacy.coreChampionships >= 3) badges.push('王朝缔造者');
+    else if (legacy.coreChampionships >= 1) badges.push('冠军核心');
     if (mvp >= 3) badges.push('常规赛之王');
     if (dpoy >= 2) badges.push('防守丰碑');
     if (totals.pts >= 30000) badges.push('三万分俱乐部');
     if (totals.reb >= 15000) badges.push('篮板怪兽');
     if (totals.ast >= 10000) badges.push('组织大师');
-    if (career.totalGames >= 1400) badges.push('钢铁之躯');
+    if (career.totalGames >= 1400) badges.push('常青树');
     if (career.teamsPlayed.length === 1 && career.history.length >= 10 && career.totalGames >= 650) badges.push('一人一城');
     if (career.teamsPlayed.length >= 5) badges.push('联盟旅人');
-    if (career.history.some(entry => entry.age >= 35 && entry.ovr >= 88)) badges.push('逆龄传奇');
     if (!career.championships && score >= 58) badges.push('无冕之王');
-    if (Number(average.pts) >= 27) badges.push('得分机器');
-    if (Number(average.stl) + Number(average.blk) >= 3 && Number(average.pts) >= 20) badges.push('攻防一体');
     if (!badges.length) {
       if (tier.top30) badges.push('时代传奇');
       else if (career.history.length <= 4) badges.push('新秀合同限定');
       else if (legacy.careerPpg < 5) badges.push('得分个位数');
-      else if (career.peakOVR < 70) badges.push('板凳观察员');
-      else badges.push(highLevelSeasons >= 8 ? '长青支柱' : '普通打工人');
+      else badges.push(career.totalGames >= 900 ? '长青支柱' : '普通打工人');
     }
     const strongest = Object.entries(dimensions).sort((left, right) => right[1] - left[1])[0];
     const weakest = Object.entries(dimensions).sort((left, right) => left[1] - right[1])[0];
-    const formalCopy = `我的生涯历史评分为 ${score} 分。巅峰达到 ${career.peakOVR} OVR，累计 ${Math.round(totals.pts).toLocaleString()} 分、${Math.round(totals.reb).toLocaleString()} 个篮板和 ${Math.round(totals.ast).toLocaleString()} 次助攻；${career.championships} 次夺冠、${mvp} 次 MVP、${allNba} 次入选最佳阵容。${strongest[0]}是最有说服力的历史资本。`;
+    const formalCopy = `我的生涯履历评分为 ${score} 分。累计 ${Math.round(totals.pts).toLocaleString()} 分、${Math.round(totals.reb).toLocaleString()} 个篮板和 ${Math.round(totals.ast).toLocaleString()} 次助攻；${career.championships} 次夺冠，其中 ${legacy.coreChampionships} 次以核心身份完成，另有 ${mvp} 次 MVP、${allNba} 次最佳阵容。${strongest[0]}是最有说服力的历史资本。`;
     let copy = formalCopy;
     if (!tier.top30 && career.history.length <= 4 && legacy.careerPpg < 5) {
-      copy = `我的联盟生涯只维持了 ${career.history.length} 个赛季，场均 ${legacy.careerPpg.toFixed(1)} 分，巅峰仅 ${career.peakOVR} OVR。与其说留下了历史地位，不如说成功让联盟档案系统多了一条记录。`;
+      copy = `我的联盟生涯只维持了 ${career.history.length} 个赛季，场均 ${legacy.careerPpg.toFixed(1)} 分。与其说留下了历史地位，不如说成功让联盟档案系统多了一条记录。`;
     } else if (!tier.top30 && legacy.careerPpg < 5) {
       copy = `我打了 ${career.history.length} 个赛季，场均 ${legacy.careerPpg.toFixed(1)} 分。职业态度或许值得肯定，但比赛贡献主要体现在让主力得到喘息时间。`;
     } else if (!tier.top30 && career.totalGames < 200) {
-      copy = `我的生涯停在 ${career.totalGames} 场，巅峰 ${career.peakOVR} OVR。球迷还没来得及记住球衣号码，履历已经进入总结环节。`;
+      copy = `我的生涯停在 ${career.totalGames} 场。球迷还没来得及记住球衣号码，履历已经进入总结环节。`;
     } else if (!tier.top30 && !allNba && !career.championships) {
       copy = `${formalCopy}不过没有最佳阵容和冠军背书，所谓历史地位基本只存在于我自己的退役演讲里。`;
     }
     const gateNotes = [];
-    if (!mvp) gateNotes.push('缺少 MVP');
-    if (!career.championships) gateNotes.push('缺少总冠军');
-    if (allNba < 4) gateNotes.push('最佳阵容履历不足');
-    const lowCareerEvidence = career.history.length <= 4 || legacy.careerPpg < 5 || career.peakOVR < 70;
+    if (tier.rankNumber > 10) gateNotes.push(`历史前十只认核心冠军、FMVP与MVP硬指标（当前硬指标 ${legacy.hardScore} 分）`);
+    if (legacy.movement.capRank) gateNotes.push(`${legacy.movement.activeMoves} 次主动离队将最高档位封顶在历史前 ${legacy.movement.capRank}`);
+    if (legacy.movement.penalty) gateNotes.push(`主动换队相关行为扣除 ${legacy.movement.penalty} 分履历分`);
+    const lowCareerEvidence = career.history.length <= 4 || legacy.careerPpg < 5;
     const caveat = lowCareerEvidence
-      ? `仅完成 ${career.history.length} 个赛季、${career.totalGames} 场比赛，场均 ${legacy.careerPpg.toFixed(1)} 分，巅峰 ${career.peakOVR} OVR；这份履历首先需要证明自己属于稳定轮换，再谈历史排名。`
+      ? `仅完成 ${career.history.length} 个赛季、${career.totalGames} 场比赛，场均 ${legacy.careerPpg.toFixed(1)} 分；这份履历首先需要证明自己属于稳定轮换，再谈历史排名。`
       : gateNotes.length
       ? `${gateNotes.join('、')}，历史档位因此受到硬性限制；当前最需要补强的是${weakest[0]}。`
       : (weakest[1] >= 70 ? '评价没有明显短板，巅峰、积累与团队成绩形成了完整闭环。' : `${weakest[0]}是历史排名中的主要争议项。`);
@@ -3690,7 +3747,11 @@
       nextTitle: titleEvaluation.next,
       dimensions,
       copy,
-      caveat
+      caveat,
+      coreChampionships: legacy.coreChampionships,
+      hardScore: legacy.hardScore,
+      movement: legacy.movement,
+      critique: legacy.critique
     };
   }
 
@@ -3970,49 +4031,54 @@
 
   function careerDocumentaryChapters(career, standing) {
     const history = career.history || [];
-    const peak = history.slice().sort((left, right) => right.ovr - left.ovr || Number(right.averages?.pts || 0) - Number(left.averages?.pts || 0))[0];
+    const seasonWeight = entry => Number(entry.averages?.pts || 0) + Number(entry.averages?.reb || 0) * 0.55
+      + Number(entry.averages?.ast || 0) * 0.75 + (entry.awards || []).length * 3 + (entry.coreChampionship ? 12 : 0);
+    const peak = history.slice().sort((left, right) => seasonWeight(right) - seasonWeight(left))[0];
     const teamCounts = history.reduce((result, entry) => {
       result[entry.teamId] = (result[entry.teamId] || 0) + 1;
       return result;
     }, {});
     const representativeTeamId = Object.entries(teamCounts).sort((left, right) => right[1] - left[1])[0]?.[0] || career.currentTeam;
     const representativeTeam = DATA.getTeam(representativeTeamId);
-    const postseasonWeight = entry => entry.champion ? 5 : (/总决赛/.test(entry.postseason) ? 4 : (/分区决赛/.test(entry.postseason) ? 3 : (/半决赛/.test(entry.postseason) ? 2 : (/首轮/.test(entry.postseason) ? 1 : 0))));
-    const classic = history.slice().sort((left, right) => postseasonWeight(right) - postseasonWeight(left) || Number(right.averages?.pts || 0) - Number(left.averages?.pts || 0))[0];
-    const awards = Object.entries(career.awardCounts).sort((left, right) => right[1] - left[1]);
+    const firstCoreTitle = history.find(entry => entry.coreChampionship);
+    const firstMajorSeason = history.find(entry => (entry.awards || []).some(label => ['最有价值球员', '最佳防守球员', '最佳阵容'].includes(label)));
+    const failedSeason = history.find(entry => /止步|无缘/.test(String(entry.postseason)));
+    const redemption = failedSeason && history.find(entry => entry.seasonNumber > failedSeason.seasonNumber && entry.coreChampionship);
+    const rivalMap = {};
+    history.forEach(entry => (entry.series || []).forEach(series => {
+      if (!series.opponent) return;
+      const record = rivalMap[series.opponent] || { meetings: 0, wins: 0, losses: 0 };
+      record.meetings += 1;
+      if (series.won) record.wins += 1; else record.losses += 1;
+      rivalMap[series.opponent] = record;
+    }));
+    const rivalEntry = Object.entries(rivalMap).sort((left, right) => right[1].meetings - left[1].meetings || right[1].wins - left[1].wins)[0];
+    const movementEvents = (career.transactions || []).filter(event => ['申请交易', '自由签约', '球队交易', '强硬交易申请失败'].includes(event.type));
+    const majorInjury = history.find(entry => (entry.injuries || []).length);
     const totals = career.totals;
-    return [
-      {
-        label: '巅峰赛季',
-        title: peak ? `${peak.age} 岁 · ${peak.ovr} OVR` : `${career.peakOVR} OVR`,
-        body: peak ? `${peak.averages.pts} 分、${peak.averages.reb} 篮板、${peak.averages.ast} 助攻，带队取得 ${peak.wins} 胜。` : '生涯没有留下完整的单季数据。'
-      },
-      {
-        label: '代表球队',
-        title: representativeTeam?.name || '未形成代表球队',
-        body: representativeTeam ? `我在这里度过 ${teamCounts[representativeTeamId] || 0} 个赛季，这支球队构成了生涯最清晰的身份。` : '效力时间过于分散，没有一支球队成为生涯归属。'
-      },
-      {
-        label: '经典季后赛',
-        title: classic?.postseason || '没有代表性系列赛',
-        body: classic ? `第 ${classic.seasonNumber} 季以 ${classic.averages.pts} 分、${classic.averages.ast} 助攻完成${classic.postseason}。` : '生涯未留下可以进入季后赛档案的篇章。'
-      },
-      {
-        label: '累计纪录',
-        title: `${Math.round(totals.pts).toLocaleString()} 分`,
-        body: `${career.totalGames} 场比赛，另有 ${Math.round(totals.reb).toLocaleString()} 篮板和 ${Math.round(totals.ast).toLocaleString()} 助攻。`
-      },
-      {
-        label: '荣誉陈列',
-        title: awards.length ? `${awards.reduce((sum, [, count]) => sum + count, 0)} 项主要荣誉` : '主要荣誉空缺',
-        body: awards.length ? awards.map(([label, count]) => `${label} ${count} 次`).join(' · ') : '没有联盟主要奖项为这段生涯提供背书。'
-      },
-      {
-        label: '历史裁决',
-        title: `${standing.title} · ${standing.score} 分`,
-        body: standing.caveat
-      }
-    ];
+    const chapters = [];
+    if (firstMajorSeason) chapters.push({ format: '新闻头条', label: '崛起', title: `第 ${firstMajorSeason.seasonNumber} 季，联盟开始记住我`, body: `${firstMajorSeason.averages?.pts || 0} 分、${firstMajorSeason.averages?.reb || 0} 篮板、${firstMajorSeason.averages?.ast || 0} 助攻，${(firstMajorSeason.awards || []).join('、')}让潜力第一次变成公开履历。` });
+    if (peak) {
+      const crediblePeak = seasonWeight(peak) >= 24;
+      chapters.push({
+        format: crediblePeak ? '电视辩论' : '球探复盘', label: '巅峰',
+        title: crediblePeak ? `${peak.age} 岁的答案` : '最高光也只是一瞬',
+        body: crediblePeak
+          ? `这一季场均 ${peak.averages?.pts || 0} 分、${peak.averages?.reb || 0} 篮板、${peak.averages?.ast || 0} 助攻，球队拿到 ${peak.wins} 胜。争论可以继续，比赛产出已经写进档案。`
+          : `生涯最好的一季只有 ${peak.averages?.pts || 0} 分、${peak.averages?.reb || 0} 篮板、${peak.averages?.ast || 0} 助攻。这不是被时代忽略，只是没有制造足够大的声音。`
+      });
+    }
+    if (redemption) chapters.push({ format: '纪录片旁白', label: '救赎', title: `从${failedSeason.postseason}到冠军核心`, body: `第 ${failedSeason.seasonNumber} 季的失败没有成为扣分项。${redemption.seasonNumber - failedSeason.seasonNumber} 季后，我以${redemption.championshipCores?.find(player => player.id === 'user-player')?.role || '核心'}身份完成夺冠，那次失利因此变成了故事的伏笔。` });
+    else if (failedSeason && !standing.coreChampionships) chapters.push({ format: '球迷论坛', label: '未竟之战', title: failedSeason.postseason, body: `失败没有从历史档位里倒扣分数，但也没有凭空生成冠军和FMVP。后来未能完成反转，这一页最终保留为争议。` });
+    if (firstCoreTitle) chapters.push({ format: '球队声明', label: '冠军', title: `${DATA.getTeam(firstCoreTitle.teamId).name}冠军核心`, body: `第 ${firstCoreTitle.seasonNumber} 季，我被认定为${firstCoreTitle.championshipCores?.find(player => player.id === 'user-player')?.role || '季后赛核心'}。每座冠军最多只记录两名核心，这一冠进入历史硬指标。` });
+    if (rivalEntry && rivalEntry[1].meetings >= 2) chapters.push({ format: '宿敌采访', label: '宿敌', title: `${DATA.getTeam(rivalEntry[0]).name}，${rivalEntry[1].meetings} 次相遇`, body: `系列赛交手留下 ${rivalEntry[1].wins} 胜 ${rivalEntry[1].losses} 负。反复碰面让这支球队成为生涯叙事里无法删除的对照组。` });
+    if (movementEvents.length) chapters.push({ format: '交易新闻', label: '球队关系', title: `${career.teamsPlayed.length} 支球队，${standing.movement.activeMoves} 次主动离队`, body: `被交易不计入惩罚；主动申请或自由选择离开则留下真实代价。本段生涯因此扣除 ${standing.movement.penalty} 分${standing.movement.capRank ? `，历史档位最高封顶前 ${standing.movement.capRank}` : ''}。` });
+    if (majorInjury) chapters.push({ format: '复出专访', label: '伤病', title: `${majorInjury.age} 岁遭遇${majorInjury.injuries.join('、')}`, body: '伤病造成的失败不被用来贬低生涯；还能回到赛场的赛季，才是这段经历真正留下的价值。' });
+    chapters.push({ format: '数据档案', label: '累计纪录', title: `${Math.round(totals.pts).toLocaleString()} 分`, body: `${career.totalGames} 场比赛，另有 ${Math.round(totals.reb).toLocaleString()} 篮板和 ${Math.round(totals.ast).toLocaleString()} 助攻。数字可以证明产量，但不能绕过历史前十的冠军硬门槛。` });
+    chapters.push({ format: '球队档案', label: '归属', title: representativeTeam?.name || '没有固定归属', body: representativeTeam ? `我在这里效力 ${teamCounts[representativeTeamId] || 0} 季。结合效力年限、核心冠军和球队关系，退役球衣${standing.coreChampionships && teamCounts[representativeTeamId] >= 8 ? '将进入正式讨论' : '仍缺少足够依据'}；${standing.coreChampionships >= 3 && teamCounts[representativeTeamId] >= 10 ? '立像和退役后回归管理层也拥有现实基础' : '立像或管理层回归还停留在球迷想象'}。` : '频繁流动让任何一支球队都难以单独认领这段生涯。' });
+    chapters.push({ format: '名人堂评审', label: '历史裁决', title: `${standing.rank} · ${standing.score} 分`, body: `${standing.caveat} 生涯累计 ${Math.round(totals.pts).toLocaleString()} 分、${Math.round(totals.reb).toLocaleString()} 篮板、${Math.round(totals.ast).toLocaleString()} 助攻。` });
+    const selected = chapters.filter((chapter, index) => index === chapters.findIndex(item => item.label === chapter.label));
+    return selected.slice(0, Math.min(7, Math.max(4, selected.length)));
   }
 
   function careerSummaryHTML() {
@@ -4029,23 +4095,24 @@
       : `征战 ${completedSeasons} 个赛季，未获得联盟主要个人奖项。`;
     return `
       <section class="career-summary">
-        <div class="career-summary-hero"><span>RETIREMENT · AGE ${retirementAge}</span><h1>${standing.title}</h1><p>${standing.rank} · 历史评分 ${standing.score}</p></div>
+        <div class="career-summary-hero"><span>RETIREMENT · AGE ${retirementAge}</span><h1>${standing.title}</h1><p>${standing.rank} · 履历评分 ${standing.score}</p></div>
         <div class="legacy-badges">${standing.badges.map(label => `<span class="legacy-badge">${label}</span>`).join('')}</div>
         <p class="career-legacy-copy">${standing.copy}</p>
         <section class="career-documentary" aria-label="生涯纪录片总结">
-          ${chapters.map((chapter, index) => `<article><span>${String(index + 1).padStart(2, '0')} · ${chapter.label}</span><h2>${chapter.title}</h2><p>${chapter.body}</p></article>`).join('')}
+          ${chapters.map((chapter, index) => `<article data-format="${chapter.format}"><span>${String(index + 1).padStart(2, '0')} · ${chapter.format}</span><h2>${chapter.title}</h2><p>${chapter.body}</p></article>`).join('')}
         </section>
+        ${standing.critique ? `<blockquote class="community-verdict"><span>社区锐评</span><p><b>${standing.critique.title}：</b>${standing.critique.text}</p></blockquote>` : ''}
         <section class="career-title-review">
           <header><span>CAREER TITLES</span><h2>生涯称号判定</h2></header>
           <div>${standing.titles.length ? standing.titles.map(item => `<article><b>${item.title}</b><p>${item.reason}</p></article>`).join('') : '<p class="title-empty">这段生涯没有达到正式称号门槛。</p>'}</div>
-          ${standing.nextTitle ? `<p class="next-title"><b>未达到：${standing.nextTitle.title}</b><span>${standing.nextTitle.requirement}</span></p>` : '<p class="next-title"><b>全部称号条件均已满足</b></p>'}
+          ${standing.nextTitle ? `<p class="next-title"><b>未达到：${standing.nextTitle.title}</b><span>${standing.nextTitle.requirement}</span></p>` : '<p class="next-title"><b>已达到当前档位全部核心条件</b></p>'}
         </section>
         <div class="legacy-dimensions">${Object.entries(standing.dimensions).map(([label, value]) => `<div class="legacy-dimension"><div><span>${label}</span><b>${value}</b></div><i><em style="width:${value}%"></em></i></div>`).join('')}</div>
         <p class="legacy-caveat"><b>评价依据：</b>${standing.caveat}</p>
         <div class="career-summary-grid">
           <div><b>${completedSeasons}</b><span>生涯赛季</span></div><div><b>${career.totalGames}</b><span>总场次</span></div>
           <div><b>${Math.round(totals.pts).toLocaleString()}</b><span>总得分</span></div><div><b>${Math.round(totals.reb).toLocaleString()}</b><span>总篮板</span></div>
-          <div><b>${Math.round(totals.ast).toLocaleString()}</b><span>总助攻</span></div><div><b>${career.peakOVR}</b><span>巅峰 OVR</span></div>
+          <div><b>${Math.round(totals.ast).toLocaleString()}</b><span>总助攻</span></div><div><b>${standing.coreChampionships}</b><span>核心冠军</span></div>
           <div><b>${career.championships}</b><span>总冠军</span></div><div><b>${career.teamsPlayed.length}</b><span>效力球队</span></div>
         </div>
         <section class="career-retirement-panel"><h2>生涯平均</h2><div class="retirement-average-row">
@@ -4711,11 +4778,12 @@
       <section class="modal update-announcement-modal" data-update-announcement role="dialog" aria-modal="true" aria-labelledby="update-announcement-title">
         <header class="modal-head"><div><span class="modal-kicker">AUG 05 · GAME UPDATE</span><h2 id="update-announcement-title">今日更新</h2></div><button class="modal-close" type="button" data-action="dismiss-update-announcement" aria-label="关闭">×</button></header>
         <div class="modal-body">
-          <p class="update-announcement-lead">休赛期成长改为由我亲手决定，顶级表现也拥有更高的成长上限。</p>
+          <p class="update-announcement-lead">生涯终点不再看纸面能力，只由真实比赛、荣誉和选择决定。</p>
           <ul class="update-announcement-list">
-            <li><b>休赛期手动训练</b><span>每年根据潜力、年龄、比赛机会和赛季荣誉获得TP，自由分配后再处理合同与交易。</span></li>
-            <li><b>成本与突破重做</b><span>80以下每点1 TP，80–94每点2 TP，95至97每点6 TP；97以上固定10 TP并需完成专项解锁。</span></li>
-            <li><b>传奇成长通道</b><span>传奇赛季可获得19–20 TP，历史级赛季可获得21–22 TP；TP到账即可使用，最多结转30点。</span></li>
+            <li><b>历史评价重做</b><span>履历分由实际产出、荣誉、季后赛成就和有效生涯构成，OVR不再参与历史排名。</span></li>
+            <li><b>核心冠军硬指标</b><span>每冠最多认定FMVP与季后赛第二贡献者两名核心；历史前十以上只由核心冠军、FMVP和MVP解锁。</span></li>
+            <li><b>选择留下代价</b><span>被交易不扣分，第二次主动离队起扣除履历分，多次主动换队还会封顶历史档位。</span></li>
+            <li><b>动态生涯纪录片</b><span>结局会根据宿敌、救赎、球队关系和交易经历动态成章，并附上一条最匹配的社区锐评。</span></li>
           </ul>
           <button class="primary-btn" type="button" data-action="dismiss-update-announcement">进入游戏</button>
         </div>
@@ -5176,6 +5244,9 @@
   } else if (isLocalDebug && legacyDebug === 'low') {
     debugCareerMode = true;
     activateLowLegacyDebugState();
+  } else if (isLocalDebug && legacyDebug === 'high') {
+    debugCareerMode = true;
+    activateHighLegacyDebugState();
   } else if (isLocalDebug && [1, 15, 20].includes(debugSeason)) {
     debugCareerMode = true;
     state = buildDebugCareerState(debugSeason);

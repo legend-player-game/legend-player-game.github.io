@@ -727,18 +727,21 @@ test('historical tiers require awards and winning gates', () => {
     games: 80,
     wins: 58,
     champion: index < 4,
+    coreChampionship: index < 4,
+    averages: { pts: 28, reb: 8, ast: 7, stl: 1.3, blk: 0.8, tov: 2.8, min: 36 },
+    awards: index < 4 ? ['最有价值球员'] : ['最佳阵容'],
     postseason: index < 4 ? '总冠军' : '分区决赛止步'
   }));
   const legacy = SIM.calculateCareerLegacy(careerFixture({
     history,
     totals: { pts: 39000, reb: 12500, ast: 10500 },
-    awardCounts: { '最有价值球员': 4, '最佳阵容': 15, '常规赛得分王': 5 },
+    awardCounts: { '最有价值球员': 4, '总决赛最有价值球员': 4, '最佳阵容': 15, '常规赛得分王': 5 },
     championships: 4,
     peakOVR: 99,
     totalGames: 1600
   }));
   assert.ok(legacy.score >= 89);
-  assert.match(legacy.tier.rank, /历史前/);
+  assert.equal(legacy.tier.rank, '历史前 5');
 });
 
 test('a short low-production career is not called reliable', () => {
@@ -772,20 +775,22 @@ test('top 25 historical careers stay in the formal commentary group', () => {
     ovr: 96,
     games: 80,
     wins: 58,
-    averages: { min: 36 },
+    averages: { pts: 27, reb: 7, ast: 7, stl: 1.2, blk: 0.5, tov: 2.7, min: 36 },
+    awards: index < 2 ? ['最有价值球员', '最佳阵容'] : ['最佳阵容'],
     champion: index < 2,
+    coreChampionship: index < 2,
     postseason: index < 2 ? '总冠军' : '分区决赛止步'
   }));
   const legacy = SIM.calculateCareerLegacy({
     history,
     totals: { pts: 36000, reb: 9000, ast: 8500 },
-    awardCounts: { '最有价值球员': 2, '最佳阵容': 12, '常规赛得分王': 3 },
+    awardCounts: { '最有价值球员': 2, '总决赛最有价值球员': 1, '最佳阵容': 12, '常规赛得分王': 3 },
     championships: 2,
     peakOVR: 98,
     totalGames: 1200
   });
   assert.equal(legacy.tier.top30, true);
-  assert.match(legacy.tier.rank, /历史前 (3|10|25)/);
+  assert.match(legacy.tier.rank, /历史前 (15|25|30)/);
 });
 
 test('career titles expose achieved evidence and the next unmet condition', () => {
@@ -795,12 +800,13 @@ test('career titles expose achieved evidence and the next unmet condition', () =
     ovr: index < 13 ? 96 : 88,
     games: 78,
     champion: index < 2,
+    coreChampionship: index < 2,
     postseason: index < 2 ? '总冠军' : (index < 5 ? '分区决赛止步' : '首轮止步')
   }));
   const career = careerFixture({
     history,
     totals: { pts: 32000, reb: 8200, ast: 7600 },
-    awardCounts: { '最有价值球员': 2, '最佳阵容': 11 },
+    awardCounts: { '最有价值球员': 2, '总决赛最有价值球员': 1, '最佳阵容': 11 },
     championships: 2,
     peakOVR: 98,
     totalGames: 1248,
@@ -828,6 +834,126 @@ test('career title conditions do not award empty prestige labels', () => {
   }));
   assert.equal(titles.achieved.length, 0);
   assert.equal(titles.next.title, '联盟门面');
+});
+
+function legacyCareer({ seasons = 15, core = 0, championships = core, mvp = 0, fmvp = 0, transactions = [], totals } = {}) {
+  const history = Array.from({ length: seasons }, (_, index) => ({
+    seasonNumber: index + 1,
+    age: 18 + index,
+    teamId: 'BOS',
+    games: 78,
+    wins: 55,
+    champion: index < championships,
+    coreChampionship: index < core,
+    postseason: index < championships ? '总冠军' : '分区决赛止步',
+    averages: { pts: 29, reb: 8, ast: 8, stl: 1.4, blk: 0.7, tov: 2.8, min: 36 },
+    awards: index < mvp ? ['最有价值球员', '最佳阵容'] : ['最佳阵容']
+  }));
+  return {
+    history,
+    totals: totals || { pts: 36000, reb: 10000, ast: 9500 },
+    awardCounts: { '最有价值球员': mvp, '总决赛最有价值球员': fmvp, '最佳阵容': 12 },
+    championships,
+    totalGames: seasons * 78,
+    teamsPlayed: ['BOS'],
+    transactions
+  };
+}
+
+test('411 production cannot unlock the historical top ten without core titles', () => {
+  const career = legacyCareer({
+    seasons: 20,
+    core: 0,
+    championships: 3,
+    mvp: 8,
+    fmvp: 0,
+    totals: { pts: 42000, reb: 12000, ast: 11000 }
+  });
+  career.awardCounts['最佳防守球员'] = 5;
+  career.history.forEach(season => { season.averages = { pts: 34, reb: 11, ast: 11, stl: 2, blk: 1, tov: 2, min: 38 }; });
+  const legacy = SIM.calculateCareerLegacy(career);
+  assert.ok(legacy.score >= 92);
+  assert.equal(legacy.coreChampionships, 0);
+  assert.equal(legacy.tier.key, 'top15');
+});
+
+test('historical unique tier requires seven core titles and seven Finals MVPs', () => {
+  const legacy = SIM.calculateCareerLegacy(legacyCareer({ core: 7, championships: 7, fmvp: 7, mvp: 3 }));
+  assert.equal(legacy.hardScore, 155);
+  assert.equal(legacy.tier.key, 'unique');
+  assert.equal(legacy.critique, null);
+});
+
+test('historical top three accepts different MVP and Finals MVP mixes after the title gate', () => {
+  const mvpRoute = SIM.calculateCareerLegacy(legacyCareer({ core: 5, championships: 5, fmvp: 2, mvp: 8 }));
+  const finalsRoute = SIM.calculateCareerLegacy(legacyCareer({ core: 5, championships: 5, fmvp: 5, mvp: 3 }));
+  assert.equal(mvpRoute.tier.key, 'top3');
+  assert.equal(finalsRoute.tier.key, 'top3');
+});
+
+test('ordinary championship rings do not enter the hard metric', () => {
+  const legacy = SIM.calculateCareerLegacy(legacyCareer({ core: 0, championships: 6, fmvp: 0, mvp: 2 }));
+  assert.equal(legacy.coreChampionships, 0);
+  assert.equal(legacy.hardScore, 10);
+  assert.notEqual(legacy.tier.key, 'top10');
+});
+
+test('a championship records no more than two qualified cores', () => {
+  const players = [
+    { id: 'fmvp', games: 20, min: 38, pts: 29, reb: 8, ast: 7, stl: 1.2, blk: 0.6, tov: 2.4, fgPct: 51 },
+    { id: 'second', games: 20, min: 35, pts: 25, reb: 9, ast: 8, stl: 1.4, blk: 0.8, tov: 2.5, fgPct: 49 },
+    { id: 'third', games: 20, min: 34, pts: 24, reb: 8, ast: 7, stl: 1.1, blk: 0.7, tov: 2.3, fgPct: 50 }
+  ];
+  const cores = SIM.selectChampionshipCores(players, { teamGames: 20, teamWins: 16, finalsMvpId: 'fmvp' });
+  assert.equal(cores.length, 2);
+  assert.deepEqual(cores.map(player => player.coreRole), ['FMVP', '季后赛第二贡献者']);
+});
+
+test('active move penalties and rank caps begin with the second departure', () => {
+  const moves = count => Array.from({ length: count }, (_, index) => ({ type: '自由签约', fromTeamId: `T${index}`, teamId: `T${index + 1}`, season: index + 2, years: 4 }));
+  assert.equal(SIM.calculateCareerMovementPenalty({ transactions: moves(1) }).penalty, 0);
+  assert.equal(SIM.calculateCareerMovementPenalty({ transactions: moves(2) }).penalty, 1.5);
+  assert.deepEqual([3, 4, 5].map(count => SIM.calculateCareerMovementPenalty({ transactions: moves(count) }).capRank), [10, 15, 30]);
+  assert.deepEqual([3, 4, 5].map(count => SIM.calculateCareerMovementPenalty({ transactions: moves(count) }).penalty), [4, 7.5, 11.5]);
+});
+
+test('involuntary trades never count as active departures', () => {
+  const movement = SIM.calculateCareerMovementPenalty({ transactions: [
+    { type: '球队交易', fromTeamId: 'BOS', teamId: 'UTA' },
+    { type: '球队交易', fromTeamId: 'UTA', teamId: 'CHA' }
+  ] });
+  assert.equal(movement.activeMoves, 0);
+  assert.equal(movement.penalty, 0);
+});
+
+test('free agency after the mother team declines to offer is not an active departure', () => {
+  const movement = SIM.calculateCareerMovementPenalty({ transactions: [
+    { type: '自由签约', fromTeamId: 'BOS', teamId: 'UTA', activeDeparture: false }
+  ] });
+  assert.equal(movement.activeMoves, 0);
+});
+
+test('playoff failure labels do not subtract legacy score or tier', () => {
+  const base = legacyCareer({ core: 1, championships: 1, fmvp: 1, mvp: 2 });
+  base.history.slice(1).forEach(season => { season.postseason = '无缘季后赛'; });
+  const failed = structuredClone(base);
+  failed.history.slice(1).forEach(season => { season.postseason = '首轮止步'; });
+  const left = SIM.calculateCareerLegacy(base);
+  const right = SIM.calculateCareerLegacy(failed);
+  assert.equal(right.score, left.score);
+  assert.equal(right.tier.key, left.tier.key);
+});
+
+test('community critique picks a single nomad or longevity verdict', () => {
+  const nomadCareer = legacyCareer({ core: 2, championships: 3, transactions: [
+    { type: '自由签约', fromTeamId: 'A', teamId: 'B' },
+    { type: '自由签约', fromTeamId: 'B', teamId: 'C' },
+    { type: '申请交易', approved: true, fromTeamId: 'C', teamId: 'D' }
+  ] });
+  nomadCareer.teamsPlayed = ['A', 'B', 'C', 'D'];
+  assert.equal(SIM.calculateCareerLegacy(nomadCareer).critique.title, '游牧王朝');
+  const river = legacyCareer({ core: 1, championships: 1, totals: { pts: 42000, reb: 11000, ast: 10500 } });
+  assert.equal(SIM.calculateCareerLegacy(river).critique.title, '最长的河');
 });
 
 test('Finals MVP scoring rewards complete championship-series production', () => {

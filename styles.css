@@ -3467,6 +3467,44 @@ button.attribute-slot:not(:disabled):hover {
   line-height: 1.65;
 }
 
+.career-documentary article::before {
+  content: attr(data-format);
+  align-self: center;
+  justify-self: start;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--white);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.career-documentary article {
+  grid-template-columns: 76px 112px minmax(160px, 0.7fr) minmax(0, 1.3fr);
+}
+
+.community-verdict {
+  margin: 0 16px 24px;
+  padding: 18px 20px;
+  border: 0;
+  border-left: 6px solid var(--orange);
+  background: var(--ink);
+  color: white;
+}
+
+.community-verdict span {
+  color: var(--gold);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.community-verdict p {
+  margin: 7px 0 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.55;
+}
+
 .career-title-review {
   margin: 0 16px 22px;
   padding-block: 18px;
@@ -3671,6 +3709,8 @@ button.attribute-slot:not(:disabled):hover {
     grid-template-columns: 1fr;
     gap: 5px;
   }
+
+  .career-documentary article::before { display: none; }
 
   .career-title-review > div {
     grid-template-columns: 1fr;
