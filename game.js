@@ -150,9 +150,7 @@
     debugState.attrs = Object.fromEntries(DATA.ATTRS.map(([key]) => [key, source[key]]));
     debugState.attrs.POT = 97;
     debugState.lockedCount = DATA.ATTRS.length;
-    debugState.finalOVR = Math.round(DATA.ATTRS.reduce((sum, [key], index) => (
-      sum + (debugState.attrs[key] || 0) * DATA.POSITION_WEIGHTS.PG[index]
-    ), 0));
+    debugState.finalOVR = DATA.calculateAttributeOverall(debugState.attrs, 'PG');
     debugState.archetype = { key: 'creator', ...DATA.ARCHETYPES.creator };
     debugState.similarPlayers = [];
     debugState.careerTeam = targetSeason > 9 ? 'NYK' : 'OKC';
@@ -790,15 +788,14 @@
   }
 
   function calculateOVR(preview) {
-    const weights = DATA.POSITION_WEIGHTS[state.position];
     const lockedValues = DATA.ATTRS.filter(([key]) => key !== 'POT').map(([key]) => state.attrs[key]).filter(value => value != null);
     const fallback = lockedValues.length ? lockedValues.reduce((sum, value) => sum + value, 0) / lockedValues.length : 70;
-    let weighted = 0;
+    const previewAttrs = {};
     DATA.ATTRS.forEach(([key], index) => {
       const value = state.attrs[key] == null && preview ? fallback : (state.attrs[key] || 50);
-      weighted += value * weights[index];
+      previewAttrs[key] = value;
     });
-    return Math.max(40, Math.min(99, Math.round(weighted)));
+    return DATA.calculateAttributeOverall(previewAttrs, state.position);
   }
 
   function finalizePlayer() {
@@ -1132,8 +1129,21 @@
     if (!valid) player.attrs = generatedLeagueAttributes(player);
     player.attrs.POT = clamp(player.potential ?? player.attrs.POT ?? 70, 40, 99);
     player.attributeOvr = DATA.calculateAttributeOverall(player.attrs, player.pos);
+    if (!Number.isFinite(player.ratingOffset)) {
+      player.ratingOffset = player.isUser
+        ? 0
+        : clamp((Number(player.ovr) || player.attributeOvr) - player.attributeOvr, -5, 5);
+    }
     player.defense = Math.round(['PDEF', 'IDEF', 'BLK', 'REB'].reduce((sum, key) => sum + player.attrs[key], 0) / 4);
     return player.attrs;
+  }
+
+  function syncLeaguePlayerOverall(player) {
+    ensureLeaguePlayerAttributes(player);
+    const offset = player.isUser ? 0 : clamp(Number(player.ratingOffset) || 0, -5, 5);
+    player.ovr = clamp(Math.round(player.attributeOvr + offset), 55, 99);
+    player.simOvr = player.ovr;
+    return player.ovr;
   }
 
   function enforceLeagueAttributeApex(league) {
@@ -1151,8 +1161,7 @@
       audit[key] = ranked.filter(player => player.attrs[key] === 99).map(player => player.name);
     });
     players.forEach(player => {
-      player.attributeOvr = DATA.calculateAttributeOverall(player.attrs, player.pos);
-      player.defense = Math.round(['PDEF', 'IDEF', 'BLK', 'REB'].reduce((sum, key) => sum + player.attrs[key], 0) / 4);
+      syncLeaguePlayerOverall(player);
       if (player.isUser) {
         DATA.ATTRS.forEach(([key]) => { state.attrs[key] = player.attrs[key]; });
       }
@@ -1296,6 +1305,7 @@
       sourceOvr: state.finalOVR,
       simOvr: state.finalOVR,
       ovr: state.finalOVR,
+      ratingOffset: 0,
       potential: state.career.potential,
       defense: Math.round(['PDEF', 'IDEF', 'BLK', 'REB'].reduce((sum, key) => sum + state.attrs[key], 0) / 4),
       luck: state.career.luck,
@@ -1303,6 +1313,22 @@
       active: true
     });
     player.attrs = Object.fromEntries(DATA.ATTRS.map(([key]) => [key, state.attrs[key]]));
+    const completedSeason = state.career.history?.[state.career.history.length - 1];
+    if (completedSeason) {
+      player.lastSeason = {
+        seasonNumber: completedSeason.seasonNumber,
+        pts: Number(completedSeason.averages?.pts) || 0,
+        reb: Number(completedSeason.averages?.reb) || 0,
+        ast: Number(completedSeason.averages?.ast) || 0,
+        stl: Number(completedSeason.averages?.stl) || 0,
+        blk: Number(completedSeason.averages?.blk) || 0,
+        tov: Number(completedSeason.averages?.tov) || 0,
+        games: Number(completedSeason.games) || 0,
+        minutes: Number(completedSeason.averages?.min) || 0,
+        usage: Number(completedSeason.usage) || 0,
+        wins: Number(completedSeason.wins) || 0
+      };
+    }
     ensureLeaguePlayerAttributes(player);
     if (league.players.filter(item => item.active && item.teamId === player.teamId).length > 15) trimLeagueRosters(league);
     enforceLeagueAttributeApex(league);
@@ -1814,9 +1840,14 @@
     DATA.TEAMS.forEach(team => {
       const roster = league.players
         .filter(player => player.active && player.teamId === team.id)
-        .sort((left, right) => right.ovr - left.ovr || String(left.id).localeCompare(String(right.id)))
+        .map(player => {
+          ensureLeaguePlayerAttributes(player);
+          player.rotationMerit = SIM.calculateRotationMerit(player);
+          return player;
+        })
+        .sort((left, right) => right.rotationMerit - left.rotationMerit || right.ovr - left.ovr || String(left.id).localeCompare(String(right.id)))
         .slice(0, 15);
-      const allocation = SIM.allocatePositionAwareRotation(roster);
+      const allocation = SIM.allocatePositionAwareRotation(roster.map(player => ({ ...player, ovr: player.rotationMerit })));
       const user = roster.find(player => player.isUser);
       if (user && userPenalty > 0) {
         const original = allocation[user.id] || 0;
@@ -1923,7 +1954,7 @@
     return league;
   }
 
-  function evolveLeaguePlayerAttributes(player, overallChange, injuryDecline = 0, development = null) {
+  function evolveLeaguePlayerAttributes(player, developmentPoints, ageDecline = 0, injuryDecline = 0, development = null) {
     const attrs = ensureLeaguePlayerAttributes(player);
     const focusByArchetype = {
       sniper: ['threePT', 'MID', 'CLU'], creator: ['HAN', 'PAS', 'MID'], slasher: ['FIN', 'DNK', 'ATH'],
@@ -1942,16 +1973,19 @@
     });
     DATA.ATTRS.forEach(([key]) => {
       if (key === 'POT') return;
-      const focusScale = focus.has(key) ? 1.15 : 0.72;
-      const injuryPenalty = injurySensitive.has(key) ? injuryDecline * 0.35 : injuryDecline * 0.12;
-      const noise = Math.abs(overallChange) >= 0.5 ? randomNormal() * 0.18 : 0;
-      const offensiveSkill = ['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'CLU'].includes(key);
-      const repetitionScale = overallChange > 0 && development
-        ? (offensiveSkill ? 0.85 + development.usageFactor * 0.25 : 0.9 + development.minutesFactor * 0.18)
-        : 1;
-      const change = overallChange * focusScale * repetitionScale - injuryPenalty + noise;
-      let nextValue = Math.round(attrs[key] + change);
-      if (change > 0) {
+      const physical = ['ATH', 'DNK', 'STR'].includes(key);
+      const veteranSkill = ['PAS', 'HAN', 'CLU'].includes(key);
+      const ageScale = physical ? 1.2 : (veteranSkill ? 0.65 : 0.9);
+      const injuryScale = injurySensitive.has(key) ? 1 : 0.45;
+      const decline = Math.max(0, ageDecline * ageScale + injuryDecline * injuryScale);
+      const whole = Math.floor(decline);
+      const applied = whole + (random() < decline - whole ? 1 : 0);
+      attrs[key] = clamp(attrs[key] - applied, 40, 99);
+    });
+    let remaining = Math.max(0, Math.floor(Number(developmentPoints) || 0));
+    const appliedGrowth = Object.fromEntries(DATA.ATTRS.map(([key]) => [key, 0]));
+    while (remaining > 0) {
+      const candidates = DATA.ATTRS.filter(([key]) => key !== 'POT').map(([key], index) => {
         const unlock = SIM.historicalAttributeCeiling({
           key,
           current: attrs[key],
@@ -1959,12 +1993,24 @@
           seasons: player.seasonHistory,
           awards: playerAwards
         });
-        nextValue = Math.max(attrs[key], Math.min(nextValue, unlock.ceiling));
-      }
-      attrs[key] = clamp(nextValue, 40, 99);
-    });
+        const cost = SIM.trainingUpgradeCost(key, attrs[key]);
+        const positionWeight = DATA.POSITION_WEIGHTS[player.pos]?.[index] || 0;
+        const offensiveSkill = ['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'CLU'].includes(key);
+        const opportunity = offensiveSkill ? (development?.usageFactor || 0) : (development?.minutesFactor || 0);
+        const priority = (focus.has(key) ? 3.2 : 0.8) + positionWeight * 12 + opportunity
+          - appliedGrowth[key] * 0.75 + random() * 0.9;
+        return { key, cost, ceiling: unlock.ceiling, priority };
+      }).filter(candidate => candidate.cost <= remaining && attrs[candidate.key] < candidate.ceiling)
+        .sort((left, right) => right.priority - left.priority);
+      if (!candidates.length) break;
+      const choice = candidates[0];
+      attrs[choice.key] += 1;
+      appliedGrowth[choice.key] += 1;
+      remaining -= choice.cost;
+    }
     attrs.POT = player.potential;
-    ensureLeaguePlayerAttributes(player);
+    syncLeaguePlayerOverall(player);
+    return { spent: Math.max(0, Math.floor(Number(developmentPoints) || 0)) - remaining, remaining, appliedGrowth };
   }
 
   function evolveLeagueSeason(league, nextSeasonNumber) {
@@ -1979,12 +2025,9 @@
       }
       const beforeOvr = player.ovr;
       const appliedInjuryDecline = player.pendingInjuryDecline || 0;
-      if (player.pendingInjuryDecline > 0) {
-        player.ovr = clamp(player.ovr - player.pendingInjuryDecline, 55, 99);
-        player.defense = clamp(player.defense - Math.max(1, Math.round(player.pendingInjuryDecline * 0.7)), 50, 99);
-        player.pendingInjuryDecline = 0;
-      }
+      player.pendingInjuryDecline = 0;
       if (player.forcedRetirement) {
+        evolveLeaguePlayerAttributes(player, 0, 0, appliedInjuryDecline);
         player.active = false;
         player.exitReason = '毁灭性伤病退役';
         if (player.seasonHistory.length) {
@@ -2012,18 +2055,19 @@
         usage: player.lastSeason?.usage || 0,
         games: player.lastSeason?.games || 0
       });
-      let change = 0;
+      let developmentPoints = 0;
       if (player.age <= 30 && random() < development.chance) {
-        const potentialFactor = clamp((player.potential - 40) / 59, 0, 1);
-        if (player.age <= 22) change = (1.1 + potentialFactor * 1.9) * development.magnitudeMultiplier + randomNormal() * 0.4;
-        else if (player.age <= 26) change = (0.55 + potentialFactor * 1.15) * development.magnitudeMultiplier + randomNormal() * 0.35;
-        else change = (0.15 + potentialFactor * 0.65) * development.magnitudeMultiplier + randomNormal() * 0.25;
-      } else if (player.age <= 30) change = randomNormal() * 0.22 - 0.08;
-      else if (player.age <= 34) change = -0.7 - (player.age - 31) * 0.25 + randomNormal() * 0.35;
-      else change = -1.8 - (player.age - 35) * 0.45 + randomNormal() * 0.45;
-      player.ovr = clamp(Math.round(player.ovr + change), 55, 99);
-      player.simOvr = player.ovr;
-      evolveLeaguePlayerAttributes(player, player.ovr - beforeOvr, appliedInjuryDecline, development);
+        developmentPoints = SIM.calculateLeagueDevelopmentBudget({
+          potential: player.potential,
+          age: player.age,
+          minutes: player.lastSeason?.minutes || 0,
+          usage: player.lastSeason?.usage || 0,
+          games: player.lastSeason?.games || 0
+        }).points;
+      }
+      const ageDecline = player.age <= 30 ? 0
+        : (player.age <= 34 ? 0.55 + (player.age - 31) * 0.22 : 1.45 + (player.age - 35) * 0.38);
+      const developmentResult = evolveLeaguePlayerAttributes(player, developmentPoints, ageDecline, appliedInjuryDecline, development);
       const retirementChance = player.age >= 40 ? 1 : (player.age >= 36 ? 0.2 + (player.age - 36) * 0.18 + Math.max(0, 78 - player.ovr) * 0.035 : 0);
       if ((player.age >= 34 && player.ovr <= 68) || random() < retirementChance) {
         player.active = false;
@@ -2037,6 +2081,7 @@
             beforeOvr,
             afterOvr: player.ovr,
             change: player.ovr - beforeOvr,
+            developmentPoints: developmentResult.spent,
             injuryDecline: appliedInjuryDecline,
             retired: !player.active,
             exitReason: player.exitReason || null
@@ -4832,7 +4877,18 @@
     DATA.setEra(state.eraKey);
     if (state.eraKey === 'current' && state.career?.startYear === 2025) state.career.startYear = 2026;
     if (state.career && !Number.isFinite(state.career.startYear)) state.career.startYear = DATA.getEra(state.eraKey).startYear;
-    if (state.position && Object.keys(state.attrs || {}).length) state.archetype = findArchetype();
+    if (state.position && Object.keys(state.attrs || {}).length) {
+      state.archetype = findArchetype();
+      const hasCompleteAttributes = DATA.ATTRS.filter(([key]) => key !== 'POT')
+        .every(([key]) => Number.isFinite(state.attrs[key]));
+      if (hasCompleteAttributes) {
+        state.finalOVR = DATA.calculateAttributeOverall(state.attrs, state.position);
+        if (state.career) {
+          state.career.currentOVR = state.finalOVR;
+          state.career.peakOVR = Math.max(Number(state.career.peakOVR) || 0, state.finalOVR);
+        }
+      }
+    }
     if (state.season) hydrateSeasonTotals();
     if (state.career) {
       if (!Number.isFinite(state.career.rngState) || state.career.rngState === 0) state.career.rngState = hashText(`${state.eraKey}-${state.career.startYear}-${state.career.currentTeam}-${state.finalOVR}`);

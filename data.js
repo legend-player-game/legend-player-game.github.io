@@ -404,9 +404,7 @@
       attrs[key] = Math.max(40, Math.min(generatedCeiling, Math.round(roleValue + (calibratedOvr - 85) * 0.85 + jitter + eraAttributeOffset)));
     });
     Object.assign(attrs, overrides);
-    const attributeOvr = Math.round(ATTRS.reduce((sum, [key], index) => (
-      sum + (attrs[key] || 0) * POSITION_WEIGHTS[pos][index]
-    ), 0));
+    const attributeOvr = calculateAttributeOverall(attrs, pos);
     // Public and simulated OVR share one canonical value. Detailed attributes shape
     // performance without silently changing the rating shown to the player.
     const simOvr = calibratedOvr;
@@ -431,7 +429,18 @@
   }
 
   function calculateAttributeOverall(attrs, position) {
-    return Math.round(ATTRS.reduce((sum, [key], index) => sum + (attrs[key] || 0) * POSITION_WEIGHTS[position][index], 0));
+    const weights = POSITION_WEIGHTS[position] || POSITION_WEIGHTS.SF;
+    const weighted = ATTRS.reduce((sum, [key], index) => sum + (Number(attrs?.[key]) || 0) * weights[index], 0);
+    const eliteContributions = ATTRS.map(([key], index) => {
+      if (key === 'POT') return 0;
+      const value = Number(attrs?.[key]) || 0;
+      if (value < 98) return 0;
+      const relevance = Math.max(0.35, Math.min(1, (weights[index] || 0) / 0.08));
+      return (value >= 99 ? 1.1 : 0.8) * relevance;
+    }).sort((left, right) => right - left).slice(0, 4).reduce((sum, value) => sum + value, 0);
+    const eliteGate = Math.max(0, Math.min(1, (weighted - 86) / 6));
+    const eliteBonus = Math.min(3, eliteContributions * eliteGate);
+    return Math.max(40, Math.min(99, Math.round(weighted + eliteBonus)));
   }
 
   function enforceAttributeApex(playerGroups) {

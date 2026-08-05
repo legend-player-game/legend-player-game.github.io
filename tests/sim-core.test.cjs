@@ -203,6 +203,29 @@ test('small-sample usage cannot unlock growth and age decline remains independen
   assert.equal(veteran.chance, 0);
 });
 
+test('computer development uses a bounded TP budget instead of direct OVR growth', () => {
+  const reserve = SIM.calculateLeagueDevelopmentBudget({ potential: 92, age: 21, minutes: 9, usage: 18, games: 42 });
+  const core = SIM.calculateLeagueDevelopmentBudget({ potential: 92, age: 21, minutes: 35, usage: 31, games: 78 });
+  const veteran = SIM.calculateLeagueDevelopmentBudget({ potential: 99, age: 31, minutes: 38, usage: 34, games: 82 });
+  assert.ok(core.points > reserve.points);
+  assert.ok(core.points <= 12);
+  assert.equal(veteran.points, 0);
+});
+
+test('rotation merit lets sustained production soften but not erase an OVR gap', () => {
+  const productive = SIM.calculateRotationMerit({
+    ovr: 84, attributeOvr: 84,
+    lastSeason: { games: 76, minutes: 34, pts: 27, reb: 6, ast: 8, stl: 1.3, blk: 0.4, tov: 2.7, trueShooting: 62 }
+  });
+  const unproven = SIM.calculateRotationMerit({ ovr: 86, attributeOvr: 86 });
+  const weakHighRated = SIM.calculateRotationMerit({
+    ovr: 90, attributeOvr: 90,
+    lastSeason: { games: 75, minutes: 31, pts: 10, reb: 3, ast: 2, stl: 0.5, blk: 0.2, tov: 2, trueShooting: 51 }
+  });
+  assert.ok(productive > unproven);
+  assert.ok(weakHighRated > productive);
+});
+
 test('active veterans always receive training points while youth keeps an efficiency advantage', () => {
   const veteran = SIM.calculateTrainingPoints({ potential: 95, age: 38, minutes: 8, usage: 12, games: 25, awards: [] });
   const youngCore = SIM.calculateTrainingPoints({ potential: 95, age: 21, minutes: 35, usage: 31, games: 78, awards: ['最有价值球员'], champion: true });

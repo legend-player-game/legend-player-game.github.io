@@ -97,6 +97,26 @@ test('public and simulated OVR use one value in every era', () => {
   global.GAME_DATA.setEra('current');
 });
 
+test('multiple position-relevant 98 attributes receive bounded elite OVR value', () => {
+  const attrs = Object.fromEntries(global.GAME_DATA.ATTRS.map(([key]) => [key, key === 'POT' ? 90 : 90]));
+  assert.equal(global.GAME_DATA.calculateAttributeOverall(attrs, 'PG'), 90);
+  Object.assign(attrs, { threePT: 98, HAN: 98, PAS: 98, CLU: 98 });
+  const eliteOverall = global.GAME_DATA.calculateAttributeOverall(attrs, 'PG');
+  assert.equal(eliteOverall, 97);
+  assert.ok(eliteOverall <= 97);
+});
+
+test('elite OVR bonus respects position relevance and remains capped', () => {
+  const relevant = Object.fromEntries(global.GAME_DATA.ATTRS.map(([key]) => [key, key === 'POT' ? 90 : 90]));
+  const lowRelevance = { ...relevant };
+  Object.assign(relevant, { threePT: 99, HAN: 99, PAS: 99, CLU: 99 });
+  Object.assign(lowRelevance, { IDEF: 99, BLK: 99, REB: 99, STR: 99 });
+  const relevantOverall = global.GAME_DATA.calculateAttributeOverall(relevant, 'PG');
+  const lowRelevanceOverall = global.GAME_DATA.calculateAttributeOverall(lowRelevance, 'PG');
+  assert.ok(relevantOverall > lowRelevanceOverall);
+  assert.ok(relevantOverall <= 98);
+});
+
 test('every era has one or two apex players for each gameplay attribute', () => {
   ['current', '2003', '2009'].forEach(eraKey => {
     global.GAME_DATA.setEra(eraKey);

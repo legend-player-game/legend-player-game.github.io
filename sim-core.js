@@ -497,6 +497,39 @@
     };
   }
 
+  function calculateLeagueDevelopmentBudget(profile = {}) {
+    const development = calculateDevelopmentProfile(profile);
+    const potential = clamp(Number(profile.potential) || 70, 40, 99);
+    const age = Math.max(18, Number(profile.age) || 24);
+    if (age > 30) return { ...development, points: 0 };
+    const potentialFactor = clamp((potential - 40) / 59, 0, 1);
+    const ageBase = age <= 21 ? 6 : (age <= 24 ? 5 : (age <= 27 ? 3 : 2));
+    const rawPoints = (ageBase + potentialFactor * 3 + development.opportunity * 2)
+      * development.magnitudeMultiplier;
+    return { ...development, points: clamp(Math.round(rawPoints), 2, 12) };
+  }
+
+  function calculateRotationMerit(profile = {}) {
+    const ovr = clamp(Number(profile.ovr) || 60, 40, 99);
+    const attributeOvr = clamp(Number(profile.attributeOvr) || ovr, 40, 99);
+    const season = profile.lastSeason && typeof profile.lastSeason === 'object' ? profile.lastSeason : {};
+    const games = clamp(Number(season.games) || 0, 0, 82);
+    const minutes = clamp(Number(season.minutes) || 0, 0, 48);
+    const baseMerit = ovr * 0.82 + attributeOvr * 0.18;
+    if (games < 20 || minutes < 8) return Math.round(baseMerit * 10) / 10;
+    const production = (Number(season.pts) || 0)
+      + (Number(season.reb) || 0) * 0.7
+      + (Number(season.ast) || 0) * 0.9
+      + ((Number(season.stl) || 0) + (Number(season.blk) || 0)) * 1.4
+      - (Number(season.tov) || 0) * 0.55;
+    const efficiency = clamp(((Number(season.trueShooting) || 56) - 56) * 0.32, -3, 3);
+    const rawPerformanceRating = clamp(48 + production * 1.18 + efficiency, 50, 99);
+    const performanceRating = clamp(rawPerformanceRating, baseMerit - 10, baseMerit + 10);
+    const sampleWeight = clamp(games / 65, 0, 1) * clamp(minutes / 28, 0, 1);
+    const performanceWeight = 0.22 * sampleWeight;
+    return Math.round((baseMerit * (1 - performanceWeight) + performanceRating * performanceWeight) * 10) / 10;
+  }
+
   const TRAINING_GROUPS = {
     core: new Set(['HAN', 'PAS', 'ATH']),
     primary: new Set(['threePT', 'FIN', 'PDEF', 'IDEF', 'BLK', 'REB']),
@@ -1307,6 +1340,8 @@
     calculateTradeProbability,
     calculateTradeRequestApproval,
     calculateDevelopmentProfile,
+    calculateLeagueDevelopmentBudget,
+    calculateRotationMerit,
     calculateTrainingPoints,
     trainingAttributeGroup,
     trainingUpgradeCost,
