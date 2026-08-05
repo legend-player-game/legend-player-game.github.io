@@ -17,7 +17,7 @@
   const LEGACY_SAVE_KEYS = ['build-a-player-save-v6', 'build-a-player-save-v5', 'build-a-player-save-v4', 'build-a-player-save-v3'];
   const SAVE_SCHEMA_VERSION = 7;
   const HONOR_KEY = 'build-a-player-honors-v1';
-  const UPDATE_ANNOUNCEMENT_KEY = 'build-a-player-update-20260804-01';
+  const UPDATE_ANNOUNCEMENT_KEY = 'build-a-player-update-20260805-01';
   const CAREER_SEASONS = 20;
   const CAREER_START_AGE = 18;
   const POSITION_ARCHETYPES = {
@@ -45,6 +45,21 @@
   const ROOKIE_FIRST_NAMES = ['杰伦', '凯登', '马库斯', '德文', '特雷', '以赛亚', '卡梅伦', '安德烈', '科比', '贾马尔', '达里厄斯', '泰勒', '诺阿', '布兰登', '乔丹', '迈尔斯', '奥斯汀', '德里克', '朱利安', '阿伦'];
   const ROOKIE_LAST_NAMES = ['布朗', '约翰逊', '威廉姆斯', '戴维斯', '米切尔', '霍尔', '沃克', '刘易斯', '克拉克', '罗宾逊', '杨', '格林', '怀特', '哈里斯', '马丁', '汤普森', '安德森', '托马斯', '摩尔', '杰克逊', '贝克', '库珀', '里德', '金', '赖特', '斯科特', '亚当斯', '希尔', '卡特', '特纳'];
   const INITIAL_ROOKIES = new Set(['库珀-弗拉格', '康-克尼普尔', 'VJ-埃奇库姆', '迪伦-哈珀', '埃斯-贝利', '特雷-约翰逊', '杰里迈亚-费尔斯', '德里克-奎因', '卡特-布莱恩特']);
+  const TRAINING_PROOF_CRITERIA = {
+    threePT: ['三分命中率至少39%，场均出手至少7次', '41.5%且9次出手，或44%且7.5次出手', '得分王、MVP或场均32分之一'],
+    MID: ['命中率至少47%、场均24分且16次出手', '命中率至少51%、场均28分且18次出手', '得分王、MVP或场均32分之一'],
+    FIN: ['命中率至少52%、场均5次罚球且24分', '命中率至少56%、场均7次罚球且28分', '得分王、MVP或场均32分之一'],
+    DNK: ['场均23分、命中率52%且扣篮94+', '场均28分、命中率56%且扣篮97+', 'MVP、DPOY或得分加篮板达到42之一'],
+    HAN: ['球权30%+、失误不高于3.8，且27分或7助攻', '球权34%+、失误不高于3.6，且30分或9助攻', 'MVP，或球权35%且失误不高于3.4'],
+    PAS: ['场均9助攻且助失比2.8+', '场均11助攻且助失比3.0+', 'MVP或场均12助攻'],
+    PDEF: ['场均1.7抢断且球队42胜', '场均2.1抢断且球队50胜', 'DPOY或抢断加盖帽达到3.8'],
+    IDEF: ['抢断加盖帽2.5、8篮板且42胜', '抢断加盖帽3.2、10篮板且50胜', 'DPOY或抢断加盖帽达到3.8'],
+    BLK: ['每36分钟2.2盖帽', '每36分钟3.0盖帽', 'DPOY或抢断加盖帽达到3.8'],
+    REB: ['场均11.5篮板', '场均14篮板', 'DPOY或场均15篮板'],
+    ATH: ['65场、32分钟，运动影响31且运动94+', '70场、34分钟，运动影响37且运动97+', 'MVP、DPOY或得分加篮板达到42之一'],
+    STR: ['命中率51%、8篮板、5罚球且力量94+', '命中率55%、11篮板、7罚球且力量97+', 'MVP、DPOY或得分加篮板达到42之一'],
+    CLU: ['25分，且季后赛25分或夺冠', '27分、季后赛28分且夺冠或获得FMVP', 'FMVP，或夺冠季后赛场均30分']
+  };
 
   let audioContext = null;
   let toastTimer = null;
@@ -167,6 +182,8 @@
       recentDepartures: [],
       teamRelationships: { [debugState.careerTeam]: 65 },
       pendingOffseason: null,
+      pendingDevelopmentReview: null,
+      training: { availablePoints: 0, lifetimeEarned: 0, lifetimeSpent: 0, seasonLedger: [], unlockedCeilings: {}, lastIssuedSeason: 0 },
       tradeDemand: freshTradeDemand(),
       minutesPenaltyNextSeason: 0,
       forcedRetirement: false,
@@ -917,6 +934,8 @@
         recentDepartures: [],
         teamRelationships: { [state.careerTeam]: 65 },
         pendingOffseason: null,
+        pendingDevelopmentReview: null,
+        training: { availablePoints: 0, lifetimeEarned: 0, lifetimeSpent: 0, seasonLedger: [], unlockedCeilings: {}, lastIssuedSeason: 0 },
         tradeDemand: freshTradeDemand(),
         minutesPenaltyNextSeason: 0,
         forcedRetirement: false,
@@ -3037,6 +3056,7 @@
     const earnedAwards = state.season.awards
       .filter(award => award.isUser)
       .map(award => STATE.canonicalAwardLabel(award.recordLabel || award.label));
+    const mvpStanding = state.season.awards.find(award => award.label === '最有价值球员')?.userStanding || null;
     const entry = {
       seasonNumber: state.career.seasonNumber,
       seasonYear: state.career.startYear + state.career.seasonNumber - 1,
@@ -3056,6 +3076,7 @@
       role: state.season.roleProfile?.role || '轮换球员',
       injuries: (state.season.injuries || []).map(injury => injury.label),
       awards: earnedAwards,
+      mvpStanding: mvpStanding ? { ...mvpStanding } : null,
       champion: state.season.champion,
       postseason: seasonResultLabel(),
       finalsMvp: state.season.finalsMvp ? { ...state.season.finalsMvp } : null,
@@ -3103,48 +3124,76 @@
       usage: Number(completedSeason.usage) || 0,
       games: Number(completedSeason.games) || 0
     });
-    const growthTriggered = nextAge <= 30 && random() < development.chance;
-    const potentialFactor = clamp((state.career.potential - 40) / 59, 0, 1);
-    let baseChange = 0;
-    if (growthTriggered && nextAge <= 22) baseChange = (1 + potentialFactor * 2.1) * development.magnitudeMultiplier;
-    else if (growthTriggered && nextAge <= 26) baseChange = (0.5 + potentialFactor * 1.25) * development.magnitudeMultiplier;
-    else if (growthTriggered && nextAge <= 30) baseChange = (0.15 + potentialFactor * 0.7) * development.magnitudeMultiplier;
-    else if (nextAge <= 30) baseChange = -0.08;
-    else if (nextAge <= 34) baseChange = -(0.75 + (nextAge - 31) * 0.35);
-    else baseChange = -(1.9 + (nextAge - 35) * 0.55);
-
     const focusByArchetype = {
       sniper: ['threePT', 'MID', 'CLU'], creator: ['HAN', 'PAS', 'MID'], slasher: ['FIN', 'DNK', 'ATH'],
       wing: ['FIN', 'PDEF', 'ATH'], anchor: ['IDEF', 'BLK', 'REB'], big: ['FIN', 'REB', 'STR'],
       twoway: ['PDEF', 'IDEF', 'ATH'], pointbig: ['PAS', 'REB', 'IDEF']
     };
-    const focus = new Set(focusByArchetype[state.archetype?.key] || []);
-    const careerAwards = Object.entries(state.career.awardCounts || {}).flatMap(([label, count]) => Array(count).fill(label));
+    const focusKeys = focusByArchetype[state.archetype?.key] || [];
+    const ageDeclines = {};
     DATA.ATTRS.forEach(([key]) => {
       if (key === 'POT') return;
-      const offensiveSkill = ['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'CLU'].includes(key);
-      const repetitionScale = baseChange > 0
-        ? (offensiveSkill ? 0.85 + development.usageFactor * 0.25 : 0.9 + development.minutesFactor * 0.18)
-        : 1;
-      let change = baseChange * repetitionScale + randomNormal() * 0.55;
-      if (nextAge >= 31 && ['ATH', 'DNK', 'STR'].includes(key)) change -= 0.65;
-      if (nextAge >= 31 && ['PAS', 'HAN', 'CLU'].includes(key)) change += 0.45;
-      let nextValue = Math.round(state.attrs[key] + change);
-      if (change > 0) {
-        const unlock = SIM.historicalAttributeCeiling({
-          key,
-          current: state.attrs[key],
-          focus: focus.has(key),
-          seasons: state.career.history,
-          awards: careerAwards
-        });
-        nextValue = Math.max(state.attrs[key], Math.min(nextValue, unlock.ceiling));
+      let decline = 0;
+      if (nextAge >= 31) {
+        const physical = ['ATH', 'DNK', 'STR'].includes(key);
+        const veteranSkill = ['PAS', 'HAN', 'CLU'].includes(key);
+        let raw = nextAge <= 33 ? (physical ? 1.1 : 0.45)
+          : (nextAge <= 36 ? (physical ? 1.9 : 0.9) : (physical ? 2.8 : 1.45));
+        if (veteranSkill) raw = Math.max(0.2, raw - 0.45);
+        decline = Math.floor(raw) + (random() < raw % 1 ? 1 : 0);
       }
-      state.attrs[key] = clamp(nextValue, 40, 99);
+      ageDeclines[key] = decline;
+      state.attrs[key] = clamp(state.attrs[key] - decline, 40, 99);
     });
+
+    const automaticGrowths = {};
+    const growthTriggered = nextAge <= 30 && random() < development.chance * 0.32;
+    if (growthTriggered) {
+      const candidates = focusKeys.filter(key => state.attrs[key] < 97);
+      const growthCount = nextAge <= 24 && random() < 0.28 ? 2 : 1;
+      for (let index = 0; index < growthCount && candidates.length; index += 1) {
+        const candidateIndex = Math.floor(random() * candidates.length);
+        const key = candidates.splice(candidateIndex, 1)[0];
+        state.attrs[key] = clamp(state.attrs[key] + 1, 40, 97);
+        automaticGrowths[key] = (automaticGrowths[key] || 0) + 1;
+      }
+    }
     finalizePlayer();
     state.career.currentOVR = state.finalOVR;
     state.career.peakOVR = Math.max(state.career.peakOVR, state.finalOVR);
+    const training = state.career.training || (state.career.training = {
+      availablePoints: 0, lifetimeEarned: 0, lifetimeSpent: 0, seasonLedger: [], unlockedCeilings: {}, lastIssuedSeason: 0
+    });
+    const pointAward = SIM.calculateTrainingPoints({
+      potential: state.career.potential,
+      age: nextAge,
+      season: completedSeason
+    });
+    const priorPoints = Math.max(0, Number(training.availablePoints) || 0);
+    const credited = training.lastIssuedSeason === completedSeason.seasonNumber ? 0 : pointAward.total;
+    const availablePoints = Math.min(30, priorPoints + credited);
+    const overflow = Math.max(0, priorPoints + credited - availablePoints);
+    if (credited) {
+      training.lifetimeEarned = (Number(training.lifetimeEarned) || 0) + credited;
+      training.lastIssuedSeason = completedSeason.seasonNumber;
+    }
+    training.availablePoints = availablePoints;
+    training.unlockedCeilings = training.unlockedCeilings || {};
+    const ceilings = {};
+    const breakthrough = {};
+    DATA.ATTRS.forEach(([key]) => {
+      if (key === 'POT') return;
+      const status = SIM.attributeBreakthroughStatus({
+        key,
+        current: state.attrs[key],
+        seasons: state.career.history,
+        awards: state.season.awards || []
+      });
+      const permanent = Math.max(Number(training.unlockedCeilings[key]) || 0, status.ceiling, state.attrs[key], beforeAttrs[key]);
+      training.unlockedCeilings[key] = permanent;
+      ceilings[key] = permanent;
+      breakthrough[key] = { ...status, ceiling: permanent };
+    });
     const delta = state.finalOVR - before;
     const attributeChanges = DATA.ATTRS.map(([key, name]) => ({
       key,
@@ -3153,15 +3202,29 @@
       after: state.attrs[key],
       delta: state.attrs[key] - beforeAttrs[key]
     }));
-    const historicalUnlocks = attributeChanges
-      .filter(attribute => attribute.before <= 97 && attribute.after >= 98)
-      .map(attribute => ({ ...attribute, level: attribute.after >= 99 ? '时代标志' : '历史级候选' }));
     return {
       before,
       after: state.finalOVR,
       delta,
       attributes: attributeChanges,
-      historicalUnlocks,
+      historicalUnlocks: [],
+      baselineAttrs: Object.fromEntries(DATA.ATTRS.map(([key]) => [key, state.attrs[key]])),
+      ageDeclines,
+      automaticGrowths,
+      training: {
+        earned: credited,
+        nominalEarned: pointAward.total,
+        sources: pointAward.sources,
+        bankedBefore: priorPoints,
+        availablePoints,
+        overflow,
+        allocations: {},
+        maintenanceLimits: ageDeclines,
+        ceilings,
+        breakthrough,
+        confirmed: false,
+        completedSeasonNumber: completedSeason.seasonNumber
+      },
       drivers: {
         potential: state.career.potential,
         minutes: Number(completedSeason.averages?.min) || 0,
@@ -3169,11 +3232,12 @@
         games: Number(completedSeason.games) || 0,
         chance: Math.round(development.chance * 100),
         opportunity: Math.round(development.opportunity * 100),
-        level: development.level
+        level: development.level,
+        trainingTier: pointAward.seasonTier
       },
       text: delta > 0
-        ? `潜力兑现，能力成长 ${before} → ${state.finalOVR}`
-        : (delta < 0 ? `年龄影响 ${before} → ${state.finalOVR}` : `本年未触发成长，能力维持 ${state.finalOVR}`)
+        ? `自然成长小幅生效，接下来由我分配 ${availablePoints} 点训练点`
+        : (delta < 0 ? `年龄影响 ${before} → ${state.finalOVR}，可用维护折扣恢复部分下降` : `自然能力维持 ${state.finalOVR}，接下来手动决定成长方向`)
     };
   }
 
@@ -3280,11 +3344,11 @@
     state.career.seasonNumber += 1;
     state.career.age = pending.nextAge;
     state.career.pendingOffseason = null;
-    state.career.pendingDevelopmentReview = pending.development;
-    state.career.lastOffseasonNote = `${pending.development.text}${movement ? ` · ${movement.text}` : ' · 球队阵容保持稳定'} · 联盟${leagueUpdate.retired}人退役，${leagueUpdate.rookies}名新秀入盟，完成${leagueUpdate.transactions}笔签约或交易`;
+    state.career.pendingDevelopmentReview = null;
+    const trainingSummary = pending.development?.trainingSummary || '本年保留训练点';
+    state.career.lastOffseasonNote = `${trainingSummary}${movement ? ` · ${movement.text}` : ' · 球队阵容保持稳定'} · 联盟${leagueUpdate.retired}人退役，${leagueUpdate.rookies}名新秀入盟，完成${leagueUpdate.transactions}笔签约或交易`;
     closeModal();
-    initializeCareerSeason({ deferSimulation: true });
-    showDevelopmentModal(pending.development);
+    initializeCareerSeason();
     saveGame();
   }
 
@@ -3504,15 +3568,10 @@
     }
     const nextAge = state.career.age + 1;
     const development = applyCareerDevelopment(nextAge);
-    const result = processCareerMovement(completedSeason, nextAge, state.season.tradeRequested);
-    if (state.career.pendingOffseason) state.career.pendingOffseason.development = development;
-    if (result.status === 'pending') {
-      if (result.type === 'free-agency') showFreeAgencyModal();
-      if (result.type === 'involuntary-trade') showMovementResultModal(result.movement, true);
-      saveGame();
-      return;
-    }
-    finalizeOffseason({ nextAge, development, movement: result.movement });
+    development.nextAge = nextAge;
+    state.career.pendingDevelopmentReview = development;
+    showDevelopmentModal(development);
+    saveGame();
   }
 
   function careerStanding() {
@@ -4186,8 +4245,8 @@
   function offseasonQueueHTML(activeStep, decisionLabel = '球队决定') {
     const steps = [
       { key: 'archive', label: '赛季归档', detail: '数据与荣誉入档' },
+      { key: 'development', label: '训练加点', detail: '分配TP并确认成长' },
       { key: 'decision', label: decisionLabel, detail: '确认球队与合同' },
-      { key: 'development', label: '能力变化', detail: '查看休赛期成长' },
       { key: 'ready', label: '新赛季', detail: '进入下一年' }
     ];
     const activeIndex = Math.max(0, steps.findIndex(step => step.key === activeStep));
@@ -4198,36 +4257,133 @@
 
   function showDevelopmentModal(development) {
     if (!development) return;
-    const attributes = Array.isArray(development.attributes)
-      ? development.attributes
-      : DATA.ATTRS.map(([key, name]) => ({ key, name, before: state.attrs[key], after: state.attrs[key], delta: 0 }));
-    const role = state.season?.roleProfile?.role || '等待球队安排';
+    const priorScrollTop = modalRoot.querySelector('.training-modal')?.scrollTop || 0;
+    const training = development.training || {};
+    training.allocations = training.allocations || {};
+    const allocation = SIM.calculateTrainingAllocation({
+      attrs: development.baselineAttrs || state.attrs,
+      allocations: training.allocations,
+      points: training.availablePoints || 0,
+      age: development.nextAge || state.career.age,
+      maintenanceLimits: training.maintenanceLimits || {},
+      ceilings: training.ceilings || {}
+    });
+    const projectedOVR = DATA.calculateAttributeOverall(allocation.nextAttrs, state.position);
+    const groups = [
+      ['投射', ['threePT', 'MID']],
+      ['终结', ['FIN', 'DNK']],
+      ['组织', ['HAN', 'PAS', 'CLU']],
+      ['防守', ['PDEF', 'IDEF', 'BLK', 'REB']],
+      ['身体', ['ATH', 'STR']]
+    ];
+    const rowHTML = key => {
+      const definition = DATA.ATTRS.find(([attrKey]) => attrKey === key);
+      const name = definition?.[1] || key;
+      const baseValue = Number(development.baselineAttrs?.[key] ?? state.attrs[key]) || 40;
+      const added = Math.max(0, Number(training.allocations[key]) || 0);
+      const value = Number(allocation.nextAttrs[key]) || baseValue;
+      const status = training.breakthrough?.[key] || { ceiling: training.ceilings?.[key] || 97, progress: 0, nextRequirement: '' };
+      const maintenanceRemaining = Math.max(0, (Number(training.maintenanceLimits?.[key]) || 0) - (allocation.breakdown[key]?.maintenance || 0));
+      const nextCost = value >= status.ceiling ? null : SIM.trainingUpgradeCost(key, value, { maintenance: maintenanceRemaining > 0 });
+      const trialAllocations = { ...training.allocations, [key]: added + 1 };
+      const trial = SIM.calculateTrainingAllocation({
+        attrs: development.baselineAttrs || state.attrs,
+        allocations: trialAllocations,
+        points: training.availablePoints || 0,
+        age: development.nextAge || state.career.age,
+        maintenanceLimits: training.maintenanceLimits || {},
+        ceilings: training.ceilings || {}
+      });
+      const canAdd = trial.valid && trial.breakdown[key]?.applied === added + 1;
+      const grade = DATA.grade(value);
+      const progressCopy = status.ceiling >= 99
+        ? '时代标志'
+        : (status.ceiling >= 98
+          ? `证明 ${status.progress || 0} 点 · ${status.hasS ? '已有S' : '缺S'} · ${status.seal ? '封印完成' : '缺封印'}`
+          : `证明 ${status.progress || 0}/2`);
+      return `<div class="training-attribute-row">
+        <div class="training-attribute-name"><span style="--grade-color:${grade.color}">${grade.label}</span><b>${name}</b><small>${SIM.trainingAttributeGroup(key) === 'core' ? '核心驱动' : (SIM.trainingAttributeGroup(key) === 'primary' ? '主要能力' : '情境能力')}</small></div>
+        <div class="training-attribute-value"><small>${baseValue}</small><b>${value}</b>${added ? `<em>+${added}</em>` : ''}</div>
+        <div class="training-ceiling" title="${status.nextRequirement || ''}"><span>上限 ${status.ceiling}</span><small>${progressCopy}</small><button type="button" data-action="training-proof" data-training-key="${key}">条件</button></div>
+        <div class="training-stepper">
+          <button type="button" data-action="training-decrease" data-training-key="${key}" aria-label="降低${name}训练投入" ${added ? '' : 'disabled'}>−</button>
+          <span>${nextCost == null ? '已达上限' : `${maintenanceRemaining > 0 ? '维护' : '升级'} ${nextCost} TP`}</span>
+          <button type="button" data-action="training-increase" data-training-key="${key}" aria-label="提升${name}" ${canAdd ? '' : 'disabled'}>+</button>
+        </div>
+      </div>`;
+    };
     modalRoot.innerHTML = `
-      <section class="modal development-modal" role="dialog" aria-modal="true" aria-labelledby="development-title">
-        <header class="modal-head"><div><span class="modal-kicker">OFFSEASON REPORT</span><h2 id="development-title">休赛期训练报告</h2></div><b class="development-overall">${development.after} OVR</b></header>
+      <section class="modal development-modal training-modal" role="dialog" aria-modal="true" aria-labelledby="development-title">
+        <header class="modal-head"><div><span class="modal-kicker">OFFSEASON TRAINING</span><h2 id="development-title">制定休赛期训练方案</h2></div><b class="development-overall">${projectedOVR} OVR</b></header>
         <div class="modal-body">
-          ${offseasonQueueHTML('development', state.career.transactions.at(-1)?.type || '球队决定')}
-          <div class="development-summary">
-            <div><span>年龄</span><b>${state.career.age} 岁</b></div>
-            <div><span>球队角色</span><b>${role}</b></div>
-            <div><span>总评变化</span><b>${development.before} → ${development.after} ${developmentDeltaHTML(development.delta)}</b></div>
+          ${offseasonQueueHTML('development')}
+          <div class="training-budget">
+            <div><span>本年获得</span><b>+${training.earned || 0} TP</b><small>${(training.sources || []).filter(source => source.points).map(source => `${source.label} +${source.points}`).join(' · ')}</small></div>
+            <div><span>可用训练点</span><b>${allocation.remaining} TP</b><small>已投入 ${allocation.spent} · 最多结转 30${training.overflow ? ` · ${training.overflow} 点超出上限` : ''}</small></div>
+            <div><span>自由训练</span><b>本次 +${allocation.regularGrowth}</b></div>
           </div>
-          ${development.drivers ? `<div class="development-drivers">
-            <div><span>潜力基础</span><b>${development.drivers.potential}</b></div>
-            <div><span>比赛时间</span><b>${development.drivers.minutes.toFixed(1)} 分钟</b></div>
-            <div><span>球权参与</span><b>${development.drivers.usage.toFixed(1)}%</b></div>
-            <div><span>赛季出勤</span><b>${development.drivers.games} 场</b></div>
-            <div><span>比赛机会</span><b>${development.drivers.level} · ${development.drivers.opportunity}%</b></div>
-            <div><span>成长概率</span><b>${development.drivers.chance}%</b></div>
-          </div>` : ''}
-          <div class="development-attributes">
-            ${attributes.map(attribute => `<div><span>${attribute.name}</span><b>${attribute.after}</b>${developmentDeltaHTML(attribute.delta)}</div>`).join('')}
+          <div class="training-natural-report">
+            <b>自然变化</b><span>${development.before} → ${development.after} OVR</span><small>${Object.values(development.ageDeclines || {}).reduce((sum, value) => sum + value, 0)} 点年龄下降 · ${Object.values(development.automaticGrowths || {}).reduce((sum, value) => sum + value, 0)} 点自动微成长</small>
           </div>
-          ${development.historicalUnlocks?.length ? `<div class="historical-unlock"><span>HISTORIC ATTRIBUTE</span><b>${development.historicalUnlocks.map(attribute => `${attribute.name} ${attribute.after} · ${attribute.level}`).join(' / ')}</b><p>连续顶级赛季表现已解锁历史级属性上限。</p></div>` : ''}
-          <p class="development-note">${development.text}</p>
-          <button class="primary-btn" type="button" data-action="confirm-development">确认并开始新赛季</button>
+          <div class="training-groups">${groups.map(([label, keys]) => `<section><header><b>${label}</b><span>${keys.length} 项</span></header>${keys.map(rowHTML).join('')}</section>`).join('')}</div>
+          <div class="training-actions">
+            <button class="secondary-btn" type="button" data-action="training-reset" ${allocation.spent ? '' : 'disabled'}>重置方案</button>
+            <div><span>预计总评</span><b>${development.after} → ${projectedOVR}</b></div>
+            <button class="primary-btn" type="button" data-action="confirm-training">确认训练并处理球队事务</button>
+          </div>
         </div>
       </section>`;
+    modalRoot.querySelector('.training-modal').scrollTop = priorScrollTop;
+  }
+
+  function updateTrainingAllocation(key, delta) {
+    const development = state.career?.pendingDevelopmentReview;
+    const training = development?.training;
+    if (!development || !training || training.confirmed || key === 'POT') return;
+    const current = Math.max(0, Number(training.allocations?.[key]) || 0);
+    const next = Math.max(0, current + delta);
+    const draft = { ...(training.allocations || {}), [key]: next };
+    if (!next) delete draft[key];
+    const result = SIM.calculateTrainingAllocation({
+      attrs: development.baselineAttrs || state.attrs,
+      allocations: draft,
+      points: training.availablePoints || 0,
+      age: development.nextAge || state.career.age,
+      maintenanceLimits: training.maintenanceLimits || {},
+      ceilings: training.ceilings || {}
+    });
+    if (delta > 0 && (!result.valid || result.breakdown[key]?.applied !== next)) {
+      showToast(result.errors[0] || '当前不能继续提升这项能力');
+      return;
+    }
+    training.allocations = draft;
+    showDevelopmentModal(development);
+    saveGame();
+  }
+
+  function resetTrainingAllocation() {
+    const development = state.career?.pendingDevelopmentReview;
+    if (!development?.training) return;
+    development.training.allocations = {};
+    showDevelopmentModal(development);
+    saveGame();
+  }
+
+  function showTrainingProof(key) {
+    const development = state.career?.pendingDevelopmentReview;
+    const status = development?.training?.breakthrough?.[key];
+    const definition = DATA.ATTRS.find(([attrKey]) => attrKey === key);
+    const criteria = TRAINING_PROOF_CRITERIA[key];
+    if (!development || !status || !definition || !criteria) return;
+    modalRoot.innerHTML = `<section class="modal training-proof-modal" role="dialog" aria-modal="true" aria-labelledby="training-proof-title">
+      <header class="modal-head"><div><span class="modal-kicker">BREAKTHROUGH PATH</span><h2 id="training-proof-title">${definition[1]}突破条件</h2></div></header>
+      <div class="modal-body">
+        <div class="training-proof-status"><div><span>永久上限</span><b>${status.ceiling}</b></div><div><span>证明进度</span><b>${status.progress || 0} 点</b></div><div><span>S级赛季</span><b>${status.hasS ? '已完成' : '未完成'}</b></div><div><span>时代封印</span><b>${status.seal ? '已完成' : '未完成'}</b></div></div>
+        <div class="training-proof-rules"><article><span>A · 1点</span><b>${criteria[0]}</b></article><article><span>S · 2点</span><b>${criteria[1]}</b></article><article><span>99封印</span><b>${criteria[2]}</b></article></div>
+        <p class="development-note">97可以通过常规专项训练达到；累计2点证明解锁98。99需要累计3点、至少一个S级赛季并完成时代封印。出战不足41场的伤病赛季不计入考察，也不会清空已有进度。</p>
+        <button class="primary-btn" type="button" data-action="training-proof-back">返回训练方案</button>
+      </div>
+    </section>`;
   }
 
   function showTradeNegotiationModal(negotiation) {
@@ -4265,12 +4421,70 @@
       </section>`;
   }
 
-  function confirmDevelopmentReview() {
-    if (!state.career?.pendingDevelopmentReview) return;
+  function confirmTrainingPlan() {
+    const development = state.career?.pendingDevelopmentReview;
+    const trainingDraft = development?.training;
+    if (!development || !trainingDraft || trainingDraft.confirmed) return;
+    const result = SIM.calculateTrainingAllocation({
+      attrs: development.baselineAttrs || state.attrs,
+      allocations: trainingDraft.allocations || {},
+      points: trainingDraft.availablePoints || 0,
+      age: development.nextAge || state.career.age,
+      maintenanceLimits: trainingDraft.maintenanceLimits || {},
+      ceilings: trainingDraft.ceilings || {}
+    });
+    if (!result.valid) {
+      showToast(result.errors[0] || '训练方案无效');
+      return;
+    }
+    state.attrs = { ...state.attrs, ...result.nextAttrs, POT: state.attrs.POT };
+    finalizePlayer();
+    state.career.currentOVR = state.finalOVR;
+    state.career.peakOVR = Math.max(state.career.peakOVR, state.finalOVR);
+    const training = state.career.training;
+    training.availablePoints = result.remaining;
+    training.lifetimeSpent = (Number(training.lifetimeSpent) || 0) + result.spent;
+    const ledgerEntry = {
+      seasonNumber: trainingDraft.completedSeasonNumber,
+      age: development.nextAge || state.career.age,
+      earned: trainingDraft.earned || 0,
+      spent: result.spent,
+      remaining: result.remaining,
+      allocations: { ...trainingDraft.allocations }
+    };
+    training.seasonLedger = (training.seasonLedger || []).filter(entry => entry.seasonNumber !== ledgerEntry.seasonNumber);
+    training.seasonLedger.push(ledgerEntry);
+    trainingDraft.confirmed = true;
+    development.after = state.finalOVR;
+    development.delta = state.finalOVR - development.before;
+    development.attributes = DATA.ATTRS.map(([key, name]) => ({
+      key,
+      name,
+      before: development.attributes?.find(attribute => attribute.key === key)?.before ?? state.attrs[key],
+      after: state.attrs[key],
+      delta: state.attrs[key] - (development.attributes?.find(attribute => attribute.key === key)?.before ?? state.attrs[key])
+    }));
+    development.historicalUnlocks = development.attributes
+      .filter(attribute => attribute.before <= 97 && attribute.after >= 98)
+      .map(attribute => ({ ...attribute, level: attribute.after >= 99 ? '时代标志' : '历史级候选' }));
+    const trainedNames = Object.entries(result.breakdown)
+      .filter(([, detail]) => detail.applied > 0)
+      .map(([key, detail]) => `${DATA.ATTRS.find(([attrKey]) => attrKey === key)?.[1] || key}+${detail.applied}`);
+    development.trainingSummary = trainedNames.length ? `完成训练：${trainedNames.join('、')}` : '本年保留训练点';
     state.career.pendingDevelopmentReview = null;
     closeModal();
+    const nextAge = development.nextAge || state.career.age + 1;
+    const completedSeason = state.career.history[state.career.history.length - 1] || {};
+    const movementResult = processCareerMovement(completedSeason, nextAge, state.season.tradeRequested);
+    if (state.career.pendingOffseason) state.career.pendingOffseason.development = development;
+    if (movementResult.status === 'pending') {
+      if (movementResult.type === 'free-agency') showFreeAgencyModal();
+      if (movementResult.type === 'involuntary-trade') showMovementResultModal(movementResult.movement, true);
+      saveGame();
+      return;
+    }
+    finalizeOffseason({ nextAge, development, movement: movementResult.movement });
     saveGame();
-    if (state.season?.stage === 'regular' && !state.season.isSimulating) runRegularSeasonAnimation();
   }
 
   function showMovementResultModal(result, continueOffseason) {
@@ -4358,7 +4572,7 @@
         <header class="modal-head"><div><span class="modal-kicker">FREE AGENCY</span><h2 id="free-agency-title">自由市场合同报价</h2></div><b class="offer-count">${offers.length} 份</b></header>
         <div class="modal-body">
           ${offseasonQueueHTML('decision', '合同选择')}
-          ${offers.length ? `<p class="market-intro">合同到期。请根据阵容、球队竞争力和预计上场时间选择下一站，确认后将直接进入新赛季。</p><div class="contract-offer-list">${offers.map(contractOfferHTML).join('')}</div>` : `
+          ${offers.length ? `<p class="market-intro">训练方案已经确认。请根据阵容、球队竞争力和预计上场时间选择下一站，签约后进入新赛季。</p><div class="contract-offer-list">${offers.map(contractOfferHTML).join('')}</div>` : `
             <div class="no-offer-state"><b>目前没有球队提供合同</b><p>${pending.waitUsed ? '第二轮市场评估仍无人报价，我的联盟生涯将提前结束。' : '可以等待市场完成补强后重新评估一次，但合同年限和薪资通常会下降。'}</p></div>
             <button class="${pending.waitUsed ? 'danger-btn' : 'primary-btn'}" type="button" data-action="${pending.waitUsed ? 'retire-no-offers' : 'wait-contract-market'}">${pending.waitUsed ? '确认提前退役' : '等待市场'}</button>`}
         </div>
@@ -4405,10 +4619,10 @@
   }
 
   const HELP_PAGES = [
-    ['建球员', '14 项属性', '选择位置后随机抽取球队，从该队球员中选一人，再点击属性槽夺取一项能力。球员可拥有多个现实适配位置；相距一至四档时，普通属性依次衰减 3%、8%、14%、30%，潜力不衰减。潜力表示年轻阶段每年触发能力提升的概率，不代表巅峰总评。'],
+    ['建球员', '14 项属性', '选择位置后随机抽取球队，从该队球员中选一人，再点击属性槽夺取一项能力。球员可拥有多个现实适配位置；相距一至四档时，普通属性依次衰减 3%、8%、14%、30%，潜力不衰减。潜力影响休赛期训练点产出，年龄越大兑现比例越低，但不代表巅峰总评。'],
     ['赛季', '82 场征程', '球队根据我的能力、队内竞争和球权分配决定上场时间与使用率，两者会共同影响场均数据。联盟所有球员使用同一套伤病概率：高负荷会提高风险；轻伤暂时降低能力，重伤和毁灭性伤病会造成永久影响或提前退役。'],
     ['季后赛', '七场四胜', '常规赛前六名直通季后赛，七至十名参加附加赛。季后赛包含首轮、分区半决赛、分区决赛和总决赛，能力越强，晋级概率越高。'],
-    ['结算', '独一无二', '赛季结束后可以申请交易，但管理层可能拒绝；被拒后，下赛季轮换时间会明显下降。球队也会根据年龄、潜力、队史贡献、换队历史与阵容方向决定是否交易我。合同到期后可能收到 0 至 3 份报价，可比较球队名单、上季排名与预计上场时间后选择。'],
+    ['结算', '休赛期决策', '赛季结束后先进入训练加点，再处理合同与交易。每年训练点由潜力、年龄、上场时间、球权、出勤和赛季表现共同决定；传奇赛季可获得 19–20 TP，历史级赛季可获得 21–22 TP。TP 到账即可自由使用，不设单季或单项成长额度；老将始终至少获得 6 点，并可用维护折扣恢复当年年龄下降。全部休赛期事务确认后才会进入新赛季。'],
     ['荣誉墙', '征服联盟', '每带领一支球队夺冠，荣誉墙就会点亮对应队标。点击已点亮的球队，可查看历次冠军建模、赛季战绩和场均表现。']
   ];
 
@@ -4450,13 +4664,13 @@
     if (hasSeenUpdateAnnouncement() || modalRoot.childElementCount) return;
     modalRoot.innerHTML = `
       <section class="modal update-announcement-modal" data-update-announcement role="dialog" aria-modal="true" aria-labelledby="update-announcement-title">
-        <header class="modal-head"><div><span class="modal-kicker">AUG 04 · GAME UPDATE</span><h2 id="update-announcement-title">今日更新</h2></div><button class="modal-close" type="button" data-action="dismiss-update-announcement" aria-label="关闭">×</button></header>
+        <header class="modal-head"><div><span class="modal-kicker">AUG 05 · GAME UPDATE</span><h2 id="update-announcement-title">今日更新</h2></div><button class="modal-close" type="button" data-action="dismiss-update-announcement" aria-label="关闭">×</button></header>
         <div class="modal-body">
-          <p class="update-announcement-lead">生涯中的选择与比赛机会，现在会带来更明确的长期影响。</p>
+          <p class="update-announcement-lead">休赛期成长改为由我亲手决定，顶级表现也拥有更高的成长上限。</p>
           <ul class="update-announcement-list">
-            <li><b>请求交易深化</b><span>首次被拒后可暂时留队，或强硬施压再次申请；不同选择会影响上场时间、未来交易风险与母队续约。</span></li>
-            <li><b>交易匹配优化</b><span>原队优先换回阵容短板，新队允许位置重叠，但竞争会影响预计角色和时间。</span></li>
-            <li><b>成长逻辑升级</b><span>属性进步同时取决于潜力、上场时间、球权使用率和赛季出勤。</span></li>
+            <li><b>休赛期手动训练</b><span>每年根据潜力、年龄、比赛机会和赛季荣誉获得TP，自由分配后再处理合同与交易。</span></li>
+            <li><b>成本与突破重做</b><span>80以下每点1 TP，80–94每点2 TP，95至97每点6 TP；97以上固定10 TP并需完成专项解锁。</span></li>
+            <li><b>传奇成长通道</b><span>传奇赛季可获得19–20 TP，历史级赛季可获得21–22 TP；TP到账即可使用，最多结转30点。</span></li>
           </ul>
           <button class="primary-btn" type="button" data-action="dismiss-update-announcement">进入游戏</button>
         </div>
@@ -4634,6 +4848,16 @@
       if (!Number.isFinite(state.career.tradeRequestFailures)) state.career.tradeRequestFailures = 0;
       if (!Array.isArray(state.career.tradeCounterpartIds)) state.career.tradeCounterpartIds = [];
       if (!Array.isArray(state.career.recentDepartures)) state.career.recentDepartures = [];
+      if (!state.career.training || typeof state.career.training !== 'object') {
+        state.career.training = { availablePoints: 0, lifetimeEarned: 0, lifetimeSpent: 0, seasonLedger: [], unlockedCeilings: {}, lastIssuedSeason: 0 };
+      }
+      if (!Number.isFinite(state.career.training.availablePoints)) state.career.training.availablePoints = 0;
+      if (!Number.isFinite(state.career.training.lifetimeEarned)) state.career.training.lifetimeEarned = 0;
+      if (!Number.isFinite(state.career.training.lifetimeSpent)) state.career.training.lifetimeSpent = 0;
+      if (!Number.isFinite(state.career.training.lastIssuedSeason)) state.career.training.lastIssuedSeason = 0;
+      if (!Array.isArray(state.career.training.seasonLedger)) state.career.training.seasonLedger = [];
+      if (!state.career.training.unlockedCeilings || typeof state.career.training.unlockedCeilings !== 'object') state.career.training.unlockedCeilings = {};
+      if (state.career.pendingDevelopmentReview && !state.career.pendingDevelopmentReview.training) state.career.pendingDevelopmentReview = null;
       if (!state.career.teamRelationships || typeof state.career.teamRelationships !== 'object') state.career.teamRelationships = {};
       state.career.teamsPlayed.forEach(teamId => {
         if (!Number.isFinite(state.career.teamRelationships[teamId])) state.career.teamRelationships[teamId] = teamId === state.career.currentTeam ? 65 : 50;
@@ -4756,7 +4980,12 @@
     if (action === 'advance-career') advanceCareer();
     if (action === 'acknowledge-movement') closeModal();
     if (action === 'confirm-offseason-movement') confirmOffseasonMovement();
-    if (action === 'confirm-development') confirmDevelopmentReview();
+    if (action === 'training-increase') updateTrainingAllocation(element.dataset.trainingKey, 1);
+    if (action === 'training-decrease') updateTrainingAllocation(element.dataset.trainingKey, -1);
+    if (action === 'training-reset') resetTrainingAllocation();
+    if (action === 'training-proof') showTrainingProof(element.dataset.trainingKey);
+    if (action === 'training-proof-back') showDevelopmentModal(state.career?.pendingDevelopmentReview);
+    if (action === 'confirm-training' || action === 'confirm-development') confirmTrainingPlan();
     if (action === 'choose-contract') signContractOffer(element.dataset.team);
     if (action === 'wait-contract-market') waitForContractMarket();
     if (action === 'retire-no-offers') retireWithoutContract();
@@ -4785,7 +5014,8 @@
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && modalRoot.childElementCount) {
       if (state.season?.tradeNegotiation) showTradeNegotiationModal(state.season.tradeNegotiation);
-      else if (state.career?.pendingDevelopmentReview) confirmDevelopmentReview();
+      else if (state.career?.pendingDevelopmentReview && modalRoot.querySelector('.training-proof-modal')) showDevelopmentModal(state.career.pendingDevelopmentReview);
+      else if (state.career?.pendingDevelopmentReview) showToast('请先确认本赛季训练方案');
       else if (modalRoot.querySelector('[data-update-announcement]')) dismissUpdateAnnouncement();
       else closeModal();
     }

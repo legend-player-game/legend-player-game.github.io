@@ -497,6 +497,201 @@
     };
   }
 
+  const TRAINING_GROUPS = {
+    core: new Set(['HAN', 'PAS', 'ATH']),
+    primary: new Set(['threePT', 'FIN', 'PDEF', 'IDEF', 'BLK', 'REB']),
+    situational: new Set(['MID', 'DNK', 'STR', 'CLU'])
+  };
+
+  const TRAINING_GROUP_LABELS = {
+    core: '核心驱动',
+    primary: '主要能力',
+    situational: '情境能力'
+  };
+
+  const TRAINING_ATTRIBUTE_KEYS = ['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'];
+
+  function trainingAttributeGroup(key) {
+    if (TRAINING_GROUPS.core.has(key)) return 'core';
+    if (TRAINING_GROUPS.primary.has(key)) return 'primary';
+    return 'situational';
+  }
+
+  function trainingPotentialBonus(potential) {
+    const value = clamp(Number(potential) || 40, 40, 99);
+    if (value >= 95) return 5;
+    if (value >= 90) return 4;
+    if (value >= 80) return 3;
+    if (value >= 70) return 2;
+    if (value >= 60) return 1;
+    return 0;
+  }
+
+  function trainingAgeWeight(age) {
+    const value = Math.max(18, Number(age) || 18);
+    if (value <= 24) return 1;
+    if (value <= 30) return 0.75;
+    if (value <= 34) return 0.5;
+    return 0.25;
+  }
+
+  function trainingAwardPoints(awards = [], champion = false, coreChampion = false) {
+    let highest = 0;
+    (Array.isArray(awards) ? awards : []).forEach(award => {
+      const label = typeof award === 'string' ? award : (award?.recordLabel || award?.label || '');
+      const detail = typeof award === 'string' ? award : `${award?.winner || ''} ${award?.detail || ''}`;
+      if (['最有价值球员', '最佳防守球员', '总决赛最有价值球员'].includes(label)) highest = Math.max(highest, 5);
+      else if (label === '常规赛得分王' || (label === '最佳阵容' && detail.includes('一阵'))) highest = Math.max(highest, 4);
+      else if (label === '最佳阵容' && detail.includes('二阵')) highest = Math.max(highest, 3);
+      else if (['最佳阵容', '最佳新秀'].includes(label)) highest = Math.max(highest, 2);
+      else if (label.includes('全明星')) highest = Math.max(highest, 1);
+    });
+    return Math.min(5, highest + (champion && coreChampion ? 1 : 0));
+  }
+
+  function trainingSeasonTier(profile = {}) {
+    const season = profile.season && typeof profile.season === 'object' ? profile.season : profile;
+    const averages = season.averages || profile.averages || season;
+    const games = clamp(Number(profile.games ?? season.games) || 0, 0, 82);
+    const minutes = clamp(Number(profile.minutes ?? averages.min ?? season.minutes) || 0, 0, 48);
+    const usage = clamp(Number(profile.usage ?? season.usage) || 0, 0, 50);
+    const wins = clamp(Number(profile.wins ?? season.wins) || 0, 0, 82);
+    const champion = Boolean(profile.champion ?? season.champion);
+    const postseasonStats = profile.postseasonStats || season.postseasonStats || {};
+    const postseasonPts = Number(postseasonStats.pts) || 0;
+    const awards = profile.awards ?? season.awards ?? [];
+    const labels = new Set((Array.isArray(awards) ? awards : []).map(award => (
+      typeof award === 'string' ? award : (award?.recordLabel || award?.label || '')
+    )));
+    const hasMvp = labels.has('最有价值球员');
+    const hasDpoy = labels.has('最佳防守球员');
+    const hasFmvp = labels.has('总决赛最有价值球员') || Boolean(profile.finalsMvp ?? season.finalsMvp);
+    const mvpRank = Number(profile.mvpRank ?? season.mvpStanding?.rank) || Infinity;
+    const proofSeason = {
+      ...season,
+      games,
+      wins,
+      usage,
+      champion,
+      finalsMvp: hasFmvp,
+      averages,
+      attrs: profile.attrs || season.attrs || {},
+      postseasonStats
+    };
+    const sProofCount = TRAINING_ATTRIBUTE_KEYS.reduce((count, key) => (
+      count + (seasonAttributeProof(key, proofSeason).tier === 'S' ? 1 : 0)
+    ), 0);
+    const eligible = games >= 65 && minutes >= 30;
+    if (!eligible) return { key: 'standard', label: '常规赛季', target: 0, sProofCount, mvpRank };
+
+    const historicCombo = (hasMvp && hasFmvp) || (hasMvp && hasDpoy);
+    const historicProduction = mvpRank <= 3 && sProofCount >= 3 && wins >= 60;
+    const historicPostseason = hasFmvp && champion && sProofCount >= 3 && postseasonPts >= 30;
+    if (historicCombo || historicProduction || historicPostseason) {
+      const target = historicCombo || (historicProduction && historicPostseason) ? 22 : 21;
+      return { key: 'historic', label: '历史级赛季', target, sProofCount, mvpRank };
+    }
+
+    const majorAward = hasMvp || hasDpoy || hasFmvp;
+    const coreChampion = champion && (minutes >= 32 || usage >= 27);
+    const legendary = (mvpRank <= 3 && sProofCount >= 1)
+      || (mvpRank <= 5 && sProofCount >= 2)
+      || (majorAward && sProofCount >= 2)
+      || (coreChampion && postseasonPts >= 28 && sProofCount >= 1);
+    if (legendary) {
+      const target = mvpRank <= 3 || [hasMvp, hasDpoy, hasFmvp].filter(Boolean).length >= 2 ? 20 : 19;
+      return { key: 'legendary', label: '传奇赛季', target, sProofCount, mvpRank };
+    }
+    return { key: 'standard', label: '常规赛季', target: 0, sProofCount, mvpRank };
+  }
+
+  function calculateTrainingPoints(profile = {}) {
+    const season = profile.season && typeof profile.season === 'object' ? profile.season : {};
+    const averages = season.averages || {};
+    const age = Math.max(18, Number(profile.age ?? season.age) || 18);
+    const minutes = clamp(Number(profile.minutes ?? averages.min) || 0, 0, 48);
+    const usage = clamp(Number(profile.usage ?? season.usage) || 0, 0, 50);
+    const games = clamp(Number(profile.games ?? season.games) || 0, 0, 82);
+    const rawPotential = trainingPotentialBonus(profile.potential);
+    const potential = Math.round(rawPotential * trainingAgeWeight(age));
+    const opportunity = (minutes >= 20 ? 1 : 0) + (minutes >= 30 ? 1 : 0)
+      + (usage >= 28 ? 1 : 0) + (games >= 65 ? 1 : 0);
+    const awards = profile.awards ?? season.awards ?? [];
+    const champion = Boolean(profile.champion ?? season.champion);
+    const rawHonors = trainingAwardPoints(awards, champion, minutes >= 24 || usage >= 22);
+    const honors = Math.min(rawHonors, Math.max(0, 18 - 6 - potential - opportunity));
+    const sources = [
+      { type: 'base', label: '生涯基础', points: 6 },
+      { type: 'potential', label: `潜力兑现（${Math.round(trainingAgeWeight(age) * 100)}%）`, points: potential },
+      { type: 'opportunity', label: '比赛机会', points: opportunity },
+      { type: 'honors', label: honors < rawHonors ? '赛季荣誉（年度封顶）' : '赛季荣誉', points: honors }
+    ];
+    const ordinaryTotal = sources.reduce((sum, source) => sum + source.points, 0);
+    const seasonTier = trainingSeasonTier({ ...profile, season, awards, champion, minutes, usage, games });
+    const tailBonus = Math.max(0, seasonTier.target - ordinaryTotal);
+    if (tailBonus) sources.push({ type: 'performance', label: seasonTier.label, points: tailBonus });
+    const total = ordinaryTotal + tailBonus;
+    return { total, sources, age, minimum: 6, ordinaryMaximum: 18, maximum: 22, seasonTier };
+  }
+
+  function trainingUpgradeCost(key, current, options = {}) {
+    const value = clamp(Number(current) || 40, 40, 99);
+    if (value >= 99) return Infinity;
+    let cost;
+    if (value < 80) cost = 1;
+    else if (value < 95) cost = 2;
+    else if (value < 97) cost = 6;
+    else cost = 10;
+    return options.maintenance ? Math.max(1, Math.ceil(cost * 0.4)) : cost;
+  }
+
+  function calculateTrainingAllocation({ attrs = {}, allocations = {}, points = 0, maintenanceLimits = {}, ceilings = {} } = {}) {
+    const nextAttrs = { ...attrs };
+    const breakdown = {};
+    const errors = [];
+    let spent = 0;
+    let regularGrowth = 0;
+    Object.keys(allocations || {}).forEach(key => {
+      if (key === 'POT') return;
+      const requested = Math.max(0, Math.floor(Number(allocations[key]) || 0));
+      let maintenanceUsed = 0;
+      let regularUsed = 0;
+      let attributeSpent = 0;
+      for (let index = 0; index < requested; index += 1) {
+        const current = clamp(Number(nextAttrs[key]) || 40, 40, 99);
+        const maintenance = maintenanceUsed < Math.max(0, Number(maintenanceLimits[key]) || 0);
+        const ceiling = clamp(Number(ceilings[key]) || 97, current, 99);
+        if (current >= ceiling) {
+          errors.push(`${key}尚未解锁更高上限`);
+          break;
+        }
+        const cost = trainingUpgradeCost(key, current, { maintenance });
+        if (!Number.isFinite(cost) || spent + cost > points) {
+          errors.push('训练点不足');
+          break;
+        }
+        nextAttrs[key] = current + 1;
+        spent += cost;
+        attributeSpent += cost;
+        if (maintenance) maintenanceUsed += 1;
+        else {
+          regularUsed += 1;
+          regularGrowth += 1;
+        }
+      }
+      breakdown[key] = { requested, applied: maintenanceUsed + regularUsed, maintenance: maintenanceUsed, growth: regularUsed, spent: attributeSpent };
+    });
+    return {
+      valid: errors.length === 0,
+      errors: [...new Set(errors)],
+      spent,
+      remaining: Math.max(0, Number(points) - spent),
+      regularGrowth,
+      nextAttrs,
+      breakdown
+    };
+  }
+
   function contractMarketValue(player) {
     const ovr = Number(player?.ovr) || 60;
     const age = Number(player?.age) || 27;
@@ -563,26 +758,123 @@
     };
   }
 
-  function historicalAttributeCeiling({ key, current = 40, focus = false, official99 = false, seasons = [], awards = [] } = {}) {
-    if (official99 || current >= 99) return { ceiling: 99, level: '时代标志', unlocked: true };
-    if (!focus) return { ceiling: 95, level: '非专项上限', unlocked: current <= 95 };
-    const recent = (Array.isArray(seasons) ? seasons : []).slice(-3);
-    const values = recent.map(season => {
-      const averages = season.averages || season;
-      if (key === 'threePT') return Number(averages.threePct) >= 40.5 && Number(season.tpaPerGame ?? averages.tpa) >= 7.5;
-      if (key === 'PAS') return Number(averages.ast) >= 10.5 && Number(averages.tov ?? 99) <= 4.2;
-      if (key === 'REB') return Number(averages.reb) >= 12.5;
-      if (['PDEF', 'IDEF', 'BLK'].includes(key)) return Number(averages.stl || 0) + Number(averages.blk || 0) >= 2.8;
-      if (['FIN', 'DNK', 'MID', 'HAN'].includes(key)) return Number(averages.pts) >= 30.5;
-      if (key === 'CLU') return Number(averages.pts) >= 27 && Boolean(season.champion || season.mvp);
-      if (['ATH', 'STR'].includes(key)) return Number(season.ovr || 0) >= 95 && Number(season.age || 99) <= 28;
-      return false;
-    });
-    const qualifying = values.filter(Boolean).length;
-    const majorAward = (Array.isArray(awards) ? awards : []).some(label => ['最有价值球员', '最佳防守球员', '常规赛得分王'].includes(label));
-    if (qualifying >= 3 && majorAward) return { ceiling: 99, level: '时代标志', unlocked: true };
-    if (qualifying >= 2) return { ceiling: 98, level: '历史级候选', unlocked: true };
-    return { ceiling: 97, level: '联盟顶级', unlocked: current <= 97, qualifyingSeasons: qualifying };
+  const ATTRIBUTE_PROOF_LABELS = {
+    threePT: '高产高效三分', MID: '中距离主攻', FIN: '篮下终结与造犯规', DNK: '高强度篮筐冲击',
+    HAN: '高球权低失误创造', PAS: '组织产量与助失控制', PDEF: '外线压迫与抢断', IDEF: '禁区防守覆盖',
+    BLK: '护筐封盖产量', REB: '篮板控制', ATH: '运动影响与出勤', STR: '对抗终结与篮板', CLU: '关键时段与季后赛'
+  };
+
+  function seasonAttributeProof(key, season = {}) {
+    const averages = season.averages || season;
+    const attrs = season.attrs || {};
+    const games = Number(season.games) || 0;
+    if (games && games < 41) return { tier: 'ignored', points: 0 };
+    const pts = Number(averages.pts) || 0;
+    const reb = Number(averages.reb) || 0;
+    const ast = Number(averages.ast) || 0;
+    const stl = Number(averages.stl) || 0;
+    const blk = Number(averages.blk) || 0;
+    const tov = Number(averages.tov) || 99;
+    const minutes = Number(averages.min ?? season.minutes) || 0;
+    const usage = Number(season.usage) || 0;
+    const fgPct = Number(averages.fgPct) || 0;
+    const threePct = Number(averages.threePct) || 0;
+    const tpa = Number(season.tpaPerGame ?? averages.tpa) || 0;
+    const fta = Number(averages.fta) || 0;
+    const wins = Number(season.wins) || 0;
+    const postseason = season.postseasonStats || {};
+    let a = false;
+    let s = false;
+    if (key === 'threePT') {
+      a = threePct >= 39 && tpa >= 7;
+      s = (threePct >= 41.5 && tpa >= 9) || (threePct >= 44 && tpa >= 7.5);
+    } else if (key === 'MID') {
+      a = fgPct >= 47 && pts >= 24 && Number(averages.fga) >= 16;
+      s = fgPct >= 51 && pts >= 28 && Number(averages.fga) >= 18;
+    } else if (key === 'FIN') {
+      a = fgPct >= 52 && fta >= 5 && pts >= 24;
+      s = fgPct >= 56 && fta >= 7 && pts >= 28;
+    } else if (key === 'DNK') {
+      a = pts >= 23 && fgPct >= 52 && Number(attrs.DNK || 0) >= 94;
+      s = pts >= 28 && fgPct >= 56 && Number(attrs.DNK || 0) >= 97;
+    } else if (key === 'HAN') {
+      a = usage >= 30 && tov <= 3.8 && (pts >= 27 || ast >= 7);
+      s = usage >= 34 && tov <= 3.6 && (pts >= 30 || ast >= 9);
+    } else if (key === 'PAS') {
+      a = ast >= 9 && ast / Math.max(1, tov) >= 2.8;
+      s = ast >= 11 && ast / Math.max(1, tov) >= 3;
+    } else if (key === 'PDEF') {
+      a = stl >= 1.7 && wins >= 42;
+      s = stl >= 2.1 && wins >= 50;
+    } else if (key === 'IDEF') {
+      a = blk + stl >= 2.5 && reb >= 8 && wins >= 42;
+      s = blk + stl >= 3.2 && reb >= 10 && wins >= 50;
+    } else if (key === 'BLK') {
+      const blocksPer36 = blk * 36 / Math.max(12, minutes);
+      a = blocksPer36 >= 2.2;
+      s = blocksPer36 >= 3;
+    } else if (key === 'REB') {
+      a = reb >= 11.5;
+      s = reb >= 14;
+    } else if (key === 'ATH') {
+      const activity = pts + reb * 0.7 + stl * 2 + blk * 1.5;
+      a = games >= 65 && minutes >= 32 && activity >= 31 && Number(attrs.ATH || 0) >= 94;
+      s = games >= 70 && minutes >= 34 && activity >= 37 && Number(attrs.ATH || 0) >= 97;
+    } else if (key === 'STR') {
+      a = fgPct >= 51 && reb >= 8 && fta >= 5 && Number(attrs.STR || 0) >= 94;
+      s = fgPct >= 55 && reb >= 11 && fta >= 7 && Number(attrs.STR || 0) >= 97;
+    } else if (key === 'CLU') {
+      const playoffPts = Number(postseason.pts) || 0;
+      a = pts >= 25 && (playoffPts >= 25 || season.champion);
+      s = pts >= 27 && playoffPts >= 28 && Boolean(season.champion || season.finalsMvp);
+    }
+    return { tier: s ? 'S' : (a ? 'A' : 'none'), points: s ? 2 : (a ? 1 : 0) };
+  }
+
+  function attributeSealUnlocked(key, recent, awards) {
+    const labels = new Set([
+      ...(Array.isArray(awards) ? awards : []).map(award => typeof award === 'string' ? award : (award?.recordLabel || award?.label)),
+      ...recent.flatMap(season => season.awards || [])
+    ]);
+    const has = label => labels.has(label);
+    const best = recent.reduce((current, season) => {
+      const proof = seasonAttributeProof(key, season);
+      return proof.points > current.proof.points ? { season, proof } : current;
+    }, { season: {}, proof: { points: 0 } }).season;
+    const averages = best.averages || best;
+    if (['threePT', 'MID', 'FIN'].includes(key)) return has('常规赛得分王') || has('最有价值球员') || Number(averages.pts) >= 32;
+    if (key === 'HAN') return has('最有价值球员') || (Number(best.usage) >= 35 && Number(averages.tov) <= 3.4);
+    if (key === 'PAS') return has('最有价值球员') || Number(averages.ast) >= 12;
+    if (['PDEF', 'IDEF', 'BLK'].includes(key)) return has('最佳防守球员') || Number(averages.stl) + Number(averages.blk) >= 3.8;
+    if (key === 'REB') return has('最佳防守球员') || Number(averages.reb) >= 15;
+    if (['DNK', 'ATH', 'STR'].includes(key)) return has('最有价值球员') || has('最佳防守球员') || Number(averages.pts) + Number(averages.reb) >= 42;
+    if (key === 'CLU') return has('总决赛最有价值球员') || recent.some(season => season.champion && Number(season.postseasonStats?.pts) >= 30);
+    return false;
+  }
+
+  function attributeBreakthroughStatus({ key, current = 40, official99 = false, seasons = [], awards = [] } = {}) {
+    if (official99 || current >= 99) return { ceiling: 99, level: '时代标志', unlocked: true, progress: 3, seal: true };
+    const recent = (Array.isArray(seasons) ? seasons : []).filter(season => !season.games || Number(season.games) >= 41).slice(-4);
+    const proofs = recent.map(season => ({ seasonNumber: season.seasonNumber, ...seasonAttributeProof(key, season) }));
+    const progress = proofs.reduce((sum, proof) => sum + proof.points, 0);
+    const hasS = proofs.some(proof => proof.tier === 'S');
+    const seal = attributeSealUnlocked(key, recent, awards);
+    const ceiling = progress >= 3 && hasS && seal ? 99 : (progress >= 2 ? 98 : 97);
+    return {
+      ceiling,
+      level: ceiling >= 99 ? '时代标志' : (ceiling >= 98 ? '历史级候选' : '联盟顶级'),
+      unlocked: current <= ceiling,
+      progress,
+      hasS,
+      seal,
+      proofs,
+      proofLabel: ATTRIBUTE_PROOF_LABELS[key] || '专项表现',
+      nextRequirement: ceiling >= 99 ? '已完成时代级突破' : (ceiling >= 98 ? '需要累计3点证明、至少1个S级赛季并完成时代封印' : 'A级赛季计1点，S级赛季计2点；累计2点解锁98')
+    };
+  }
+
+  function historicalAttributeCeiling(options = {}) {
+    return attributeBreakthroughStatus(options);
   }
 
   function calculateSeasonImpactScore(player) {
@@ -1015,8 +1307,14 @@
     calculateTradeProbability,
     calculateTradeRequestApproval,
     calculateDevelopmentProfile,
+    calculateTrainingPoints,
+    trainingAttributeGroup,
+    trainingUpgradeCost,
+    calculateTrainingAllocation,
     contractMarketValue,
     calculateStatProfile,
+    seasonAttributeProof,
+    attributeBreakthroughStatus,
     historicalAttributeCeiling,
     calculateSeasonImpactScore,
     calculateMvpScore,

@@ -203,6 +203,143 @@ test('small-sample usage cannot unlock growth and age decline remains independen
   assert.equal(veteran.chance, 0);
 });
 
+test('active veterans always receive training points while youth keeps an efficiency advantage', () => {
+  const veteran = SIM.calculateTrainingPoints({ potential: 95, age: 38, minutes: 8, usage: 12, games: 25, awards: [] });
+  const youngCore = SIM.calculateTrainingPoints({ potential: 95, age: 21, minutes: 35, usage: 31, games: 78, awards: ['最有价值球员'], champion: true });
+  assert.ok(veteran.total >= 6);
+  assert.ok(youngCore.total > veteran.total);
+  assert.ok(youngCore.total <= 18);
+  assert.equal(youngCore.sources.reduce((sum, source) => sum + source.points, 0), youngCore.total);
+});
+
+test('training honors use the highest tier and remain capped', () => {
+  const points = SIM.calculateTrainingPoints({
+    potential: 80, age: 24, minutes: 35, usage: 30, games: 82, champion: true,
+    awards: ['最有价值球员', '最佳防守球员', '常规赛得分王']
+  });
+  assert.equal(points.sources.find(source => source.type === 'honors').points, 5);
+});
+
+test('legendary and historic seasons extend the training tail without using overall rating', () => {
+  const season = {
+    games: 78, wins: 56, usage: 34, champion: false, mvpStanding: { rank: 3 },
+    attrs: { HAN: 97, FIN: 97, DNK: 97, ATH: 97 },
+    averages: { min: 36, pts: 31, reb: 8, ast: 8, stl: 1.8, blk: 0.8, tov: 3.2, fgPct: 57, fga: 20, fta: 8 },
+    postseasonStats: { pts: 29 },
+    awards: ['最佳阵容']
+  };
+  const legendary = SIM.calculateTrainingPoints({ potential: 95, age: 24, season });
+  const historic = SIM.calculateTrainingPoints({
+    potential: 95,
+    age: 24,
+    season: {
+      ...season,
+      wins: 62,
+      champion: true,
+      finalsMvp: true,
+      postseasonStats: { pts: 32 },
+      awards: ['最有价值球员', '总决赛最有价值球员']
+    }
+  });
+  assert.equal(legendary.total, 20);
+  assert.equal(legendary.seasonTier.key, 'legendary');
+  assert.equal(historic.total, 22);
+  assert.equal(historic.seasonTier.key, 'historic');
+  assert.equal(historic.sources.reduce((sum, source) => sum + source.points, 0), historic.total);
+});
+
+test('short seasons cannot receive the legendary training tail', () => {
+  const points = SIM.calculateTrainingPoints({
+    potential: 99,
+    age: 23,
+    season: {
+      games: 40, wins: 60, usage: 36, champion: true, finalsMvp: true, mvpStanding: { rank: 1 },
+      attrs: { HAN: 99, FIN: 99 },
+      averages: { min: 38, pts: 35, reb: 10, ast: 11, tov: 3, fgPct: 58, fga: 22, fta: 9 },
+      postseasonStats: { pts: 34 },
+      awards: ['最有价值球员', '总决赛最有价值球员']
+    }
+  });
+  assert.equal(points.seasonTier.key, 'standard');
+  assert.ok(points.total <= 18);
+});
+
+test('training upgrade costs use the confirmed four tiers at every boundary', () => {
+  assert.equal(SIM.trainingUpgradeCost('HAN', 79), 1);
+  assert.equal(SIM.trainingUpgradeCost('HAN', 80), 2);
+  assert.equal(SIM.trainingUpgradeCost('threePT', 94), 2);
+  assert.equal(SIM.trainingUpgradeCost('threePT', 95), 6);
+  assert.equal(SIM.trainingUpgradeCost('CLU', 96), 6);
+  assert.equal(SIM.trainingUpgradeCost('CLU', 97), 10);
+  assert.equal(SIM.trainingUpgradeCost('HAN', 98), 10);
+  assert.equal(SIM.trainingUpgradeCost('HAN', 99), Infinity);
+});
+
+test('training maintenance applies the tier discount without dropping below one point', () => {
+  assert.equal(SIM.trainingUpgradeCost('HAN', 79, { maintenance: true }), 1);
+  assert.equal(SIM.trainingUpgradeCost('HAN', 94, { maintenance: true }), 1);
+  assert.equal(SIM.trainingUpgradeCost('HAN', 95, { maintenance: true }), 3);
+  assert.equal(SIM.trainingUpgradeCost('HAN', 97, { maintenance: true }), 4);
+});
+
+test('training allocation conserves points and separates veteran maintenance from growth', () => {
+  const attrs = { HAN: 93, PDEF: 80, POT: 90 };
+  const result = SIM.calculateTrainingAllocation({
+    attrs,
+    allocations: { HAN: 2, PDEF: 1 },
+    points: 20,
+    age: 38,
+    maintenanceLimits: { HAN: 2 },
+    ceilings: { HAN: 97, PDEF: 97 }
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.nextAttrs.HAN, 95);
+  assert.equal(result.nextAttrs.PDEF, 81);
+  assert.equal(result.regularGrowth, 1);
+  assert.equal(result.spent + result.remaining, 20);
+  assert.deepEqual(attrs, { HAN: 93, PDEF: 80, POT: 90 });
+});
+
+test('training points can be spent immediately without seasonal or per-attribute growth limits', () => {
+  const result = SIM.calculateTrainingAllocation({
+    attrs: { HAN: 80, PAS: 80 },
+    allocations: { HAN: 5, PAS: 5 },
+    points: 20,
+    age: 38,
+    ceilings: { HAN: 97, PAS: 97 }
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.nextAttrs.HAN, 85);
+  assert.equal(result.nextAttrs.PAS, 85);
+  assert.equal(result.regularGrowth, 10);
+  assert.equal(result.remaining, 0);
+});
+
+test('attribute proof progress unlocks 98 and a matching apex seal unlocks 99', () => {
+  const aSeason = { seasonNumber: 1, games: 78, averages: { ast: 9.5, tov: 3, min: 35 }, usage: 30 };
+  const secondA = { seasonNumber: 2, games: 80, averages: { ast: 10, tov: 3.1, min: 36 }, usage: 31 };
+  const sSeason = { seasonNumber: 3, games: 79, averages: { ast: 12.1, tov: 3.2, min: 36 }, usage: 32 };
+  assert.equal(SIM.attributeBreakthroughStatus({ key: 'PAS', current: 97, seasons: [aSeason] }).ceiling, 97);
+  assert.equal(SIM.attributeBreakthroughStatus({ key: 'PAS', current: 97, seasons: [aSeason, secondA] }).ceiling, 98);
+  const apex = SIM.attributeBreakthroughStatus({ key: 'PAS', current: 98, seasons: [aSeason, sSeason] });
+  assert.equal(apex.ceiling, 99);
+  assert.equal(apex.hasS, true);
+  assert.equal(apex.seal, true);
+});
+
+test('short injury seasons do not erase breakthrough progress', () => {
+  const status = SIM.attributeBreakthroughStatus({
+    key: 'threePT', current: 97,
+    seasons: [
+      { seasonNumber: 1, games: 78, averages: { threePct: 40, tpa: 8 } },
+      { seasonNumber: 2, games: 20, averages: { threePct: 20, tpa: 1 } },
+      { seasonNumber: 3, games: 75, averages: { threePct: 40.5, tpa: 8.5 } }
+    ]
+  });
+  assert.equal(status.ceiling, 98);
+  assert.equal(status.proofs.length, 2);
+});
+
 test('contract market value can fall below the offer threshold', () => {
   const star = SIM.contractMarketValue({ ovr: 91, age: 27, potential: 82, availability: 0.95 });
   const decliningReserve = SIM.contractMarketValue({ ovr: 68, age: 36, potential: 60, availability: 0.45 });

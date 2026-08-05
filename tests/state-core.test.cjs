@@ -49,6 +49,14 @@ test('save migration initializes postseason records and voluntary retirement fla
   assert.deepEqual(migrated.season.postseasonPlayerStats, {});
   assert.equal(migrated.season.finalsMvp, null);
   assert.equal(migrated.career.voluntaryRetirement, false);
+  assert.deepEqual(migrated.career.training, {
+    availablePoints: 0,
+    lifetimeEarned: 0,
+    lifetimeSpent: 0,
+    seasonLedger: [],
+    unlockedCeilings: {},
+    lastIssuedSeason: 0
+  });
 });
 
 test('save migration repairs an MVP season that was stored as All-NBA second team', () => {

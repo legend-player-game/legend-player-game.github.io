@@ -122,7 +122,14 @@
       if (!save.season.postseasonPlayerStats || typeof save.season.postseasonPlayerStats !== 'object') save.season.postseasonPlayerStats = {};
       if (save.season.finalsMvp === undefined) save.season.finalsMvp = null;
     }
-    if (save.career && save.career.voluntaryRetirement === undefined) save.career.voluntaryRetirement = false;
+    if (save.career) {
+      if (save.career.voluntaryRetirement === undefined) save.career.voluntaryRetirement = false;
+      if (!save.career.training || typeof save.career.training !== 'object') {
+        save.career.training = { availablePoints: 0, lifetimeEarned: 0, lifetimeSpent: 0, seasonLedger: [], unlockedCeilings: {}, lastIssuedSeason: 0 };
+      }
+      if (!Array.isArray(save.career.training.seasonLedger)) save.career.training.seasonLedger = [];
+      if (!save.career.training.unlockedCeilings || typeof save.career.training.unlockedCeilings !== 'object') save.career.training.unlockedCeilings = {};
+    }
     normalizeLeagueRatings(save);
     normalizeCareerAwards(save);
     return save;
