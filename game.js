@@ -66,6 +66,7 @@
   let spinTimer = null;
   const simulationTimers = new Set();
   let regularSeasonAnimationFrame = null;
+  let regularSeasonStartTimer = null;
   let debugCareerMode = false;
   let lastStoredSource = null;
   let lastStoredRecovered = false;
@@ -375,6 +376,10 @@
   function stopSimulationTimers() {
     simulationTimers.forEach(timer => window.clearInterval(timer));
     simulationTimers.clear();
+    if (regularSeasonStartTimer != null) {
+      window.clearTimeout(regularSeasonStartTimer);
+      regularSeasonStartTimer = null;
+    }
     if (regularSeasonAnimationFrame != null) {
       window.cancelAnimationFrame(regularSeasonAnimationFrame);
       regularSeasonAnimationFrame = null;
@@ -1018,7 +1023,7 @@
     return { minutes, usage: shotUsage, shotUsage, creationLoad, defensiveLoad, role, rotationRank, penalty, teamRotationAverage: Math.round(teamRotationAverage * 10) / 10 };
   }
 
-  function initializeCareerSeason({ deferSimulation = false } = {}) {
+  function initializeCareerSeason() {
     const league = ensureLeagueState();
     syncUserLeaguePlayer();
     state.careerTeam = state.career.currentTeam;
@@ -1051,7 +1056,7 @@
       series: [],
       postSeasonStage: null,
       awards: [],
-      isSimulating: !deferSimulation,
+      isSimulating: true,
       playInSimulation: null,
       seriesSimulation: null,
       postseasonPlayerStats: {},
@@ -1065,11 +1070,6 @@
       offseasonNote: state.career.lastOffseasonNote
     };
     showScreen('season');
-    if (!deferSimulation) {
-      window.setTimeout(() => {
-        if (state.screen === 'season' && state.season && state.season.stage === 'regular') runRegularSeasonAnimation();
-      }, 600);
-    }
   }
 
   function teamStrength(teamId) {
@@ -2607,44 +2607,10 @@
     return game;
   }
 
-  function simulateNextGame() {
-    if (state.season.stage !== 'regular') return;
-    const game = simulateOneGame();
-    if (game) playTone(game.result.won ? 660 : 260, 0.08);
-    renderSeason();
-    saveGame();
-  }
-
-  function simulateAllGames() {
-    if (state.season.stage !== 'regular' || state.season.isSimulating) return;
-    state.season.isSimulating = true;
-    renderSeason();
-    runRegularSeasonAnimation(82);
-  }
-
-  function simulateGameBatch(count) {
-    if (state.season.stage !== 'regular' || state.season.isSimulating) return;
-    const completed = state.season.completedRounds || (state.season.wins + state.season.losses);
-    state.season.isSimulating = true;
-    renderSeason();
-    runRegularSeasonAnimation(Math.min(82, completed + Math.max(1, Number(count) || 1)));
-  }
-
-  function simulateToKeyEvent() {
-    if (state.season.stage !== 'regular' || state.season.isSimulating) return;
-    const completed = state.season.completedRounds || (state.season.wins + state.season.losses);
-    state.season.isSimulating = true;
-    renderSeason();
-    runRegularSeasonAnimation(Math.min(82, completed + 20), true);
-  }
-
-  function runRegularSeasonAnimation(targetRound = 82, stopOnKeyEvent = false) {
+  function runRegularSeasonAnimation(targetRound = 82) {
     if (!state.season || state.season.stage !== 'regular') return;
     state.season.isSimulating = true;
     let lastRenderedRound = state.season.completedRounds || 0;
-    const initialInjuries = state.season.injuries.length;
-    const initialRoleChanges = state.season.roleChanges.length;
-    const initialKeyEvents = state.season.keyEvents.length;
     const runFrame = () => {
       if (!state.season || state.season.stage !== 'regular' || !state.season.isSimulating) {
         regularSeasonAnimationFrame = null;
@@ -2656,7 +2622,6 @@
       while (performance.now() - frameStart < 8 && simulated < 3 && state.season.schedule.some(item => !item.result) && (state.season.completedRounds || 0) < targetRound) {
         latest = simulateOneGame();
         simulated += 1;
-        if (stopOnKeyEvent && (state.season.injuries.length > initialInjuries || state.season.roleChanges.length > initialRoleChanges || state.season.keyEvents.length > initialKeyEvents)) break;
       }
       const completed = state.season.completedRounds || (state.season.wins + state.season.losses);
       if (completed - lastRenderedRound >= 4 || !state.season.schedule.some(item => !item.result)) {
@@ -2664,9 +2629,8 @@
         lastRenderedRound = completed;
       }
       if (completed > 0 && completed % 10 === 0) saveGame();
-      const keyEventReached = stopOnKeyEvent && (state.season.injuries.length > initialInjuries || state.season.roleChanges.length > initialRoleChanges || state.season.keyEvents.length > initialKeyEvents);
       const targetReached = completed >= targetRound;
-      if (!state.season.schedule.some(item => !item.result) || keyEventReached || targetReached) {
+      if (!state.season.schedule.some(item => !item.result) || targetReached) {
         regularSeasonAnimationFrame = null;
         state.season.isSimulating = false;
         if (!state.season.schedule.some(item => !item.result)) playTone(720, 0.12);
@@ -2677,6 +2641,15 @@
       regularSeasonAnimationFrame = window.requestAnimationFrame(runFrame);
     };
     regularSeasonAnimationFrame = window.requestAnimationFrame(runFrame);
+  }
+
+  function queueRegularSeasonSimulation() {
+    if (regularSeasonStartTimer != null || regularSeasonAnimationFrame != null) return;
+    regularSeasonStartTimer = window.setTimeout(() => {
+      regularSeasonStartTimer = null;
+      if (state.screen !== 'season' || state.season?.stage !== 'regular' || !state.season.schedule.some(game => !game.result)) return;
+      runRegularSeasonAnimation(82);
+    }, 600);
   }
 
   function updateRegularSeasonAnimation(game) {
@@ -4150,13 +4123,17 @@
         <div class="season-detail-stat"><b id="season-ft">${averages.ftPct}%</b><span>罚球命中率</span></div>
       </div>`;
 
-    if (season.stage === 'regular') content += regularSeasonHTML(completed);
+    if (season.stage === 'regular') {
+      season.isSimulating = true;
+      content += regularSeasonSimulationHTML(completed);
+    }
     if (season.stage === 'awards') content += seasonAwardsHTML();
     if (season.stage === 'playin') content += playInHTML();
     if (season.stage === 'playoffs') content += playoffsHTML();
     if (season.stage === 'ended') content += endedSeasonHTML();
     if (season.stage === 'champion') content += championHTML(team);
     container.innerHTML = content;
+    if (season.stage === 'regular') queueRegularSeasonSimulation();
   }
 
   function careerHistoryRows() {
@@ -4442,37 +4419,6 @@
         </div></section>
         <section class="career-retirement-panel"><h2>主要荣誉</h2><div class="retirement-awards">${awards.length ? awards.map(([label, count]) => `<div><b>${count}</b><span>${label}</span></div>`).join('') : `<p>${noAwardsCopy}</p>`}</div></section>
         <div class="season-actions"><button class="secondary-btn" type="button" data-action="career-history">查看逐季履历</button><button class="secondary-btn" type="button" data-action="honors">荣誉墙</button><button class="primary-btn" type="button" data-action="restart">开启新生涯</button></div>
-      </section>`;
-  }
-
-  function regularSeasonHTML(completed) {
-    if (state.season.isSimulating) return regularSeasonSimulationHTML(completed);
-    const recent = state.season.schedule.filter(game => game.result).slice(-5).reverse();
-    const user = state.career.league.players.find(player => player.isUser);
-    const rolling = user?.currentSeasonStats;
-    const latestRoleChange = state.season.roleChanges?.[state.season.roleChanges.length - 1];
-    const impactAverage = rolling?.games ? (rolling.impactTotal / rolling.games).toFixed(1) : '--';
-    const coachEvaluation = Number(user?.rotationMerit || user?.projectedWinImpact?.rating || 0).toFixed(1);
-    return `
-      <section class="season-panel">
-        <h2>常规赛 · ${completed}/82</h2>
-        <div class="season-rolling-grid" aria-label="滚动胜利贡献">
-          <div><span>教练评估</span><b>${coachEvaluation}</b></div>
-          <div><span>场均比赛影响</span><b>${impactAverage}</b></div>
-          <div><span>实际胜场贡献</span><b>${Number(rolling?.winContribution || 0).toFixed(1)}</b></div>
-          <div><span>当前轮换</span><b>第 ${state.season.roleProfile?.rotationRank || '--'} 位</b></div>
-        </div>
-        ${latestRoleChange ? `<p class="rotation-change-note">第 ${latestRoleChange.game} 场调整：${latestRoleChange.fromMinutes} → ${latestRoleChange.toMinutes} 分钟 · ${latestRoleChange.reason}</p>` : ''}
-        <div class="schedule-list">
-          ${recent.length ? recent.map(gameRowHTML).join('') : '<div class="empty-state" style="min-height:120px"><p>新赛季即将开打</p><small>先模拟一场感受状态，或直接推进完整赛季</small></div>'}
-        </div>
-        <div class="season-actions">
-          <button class="secondary-btn" type="button" data-action="next-game">模拟下一场</button>
-          <button class="secondary-btn" type="button" data-action="five-games">模拟5场</button>
-          <button class="secondary-btn" type="button" data-action="month-games">模拟到月底</button>
-          <button class="secondary-btn" type="button" data-action="key-event">模拟到关键事件</button>
-          <button class="primary-btn" type="button" data-action="all-games">模拟完整赛季</button>
-        </div>
       </section>`;
   }
 
@@ -5421,11 +5367,6 @@
     if (action === 'confirm-restore-backup') confirmRestoreBackup();
     if (action === 'export-save') exportSaveFile();
     if (action === 'import-save') document.getElementById('save-file-input').click();
-    if (action === 'next-game') simulateNextGame();
-    if (action === 'five-games') simulateGameBatch(5);
-    if (action === 'month-games') simulateGameBatch(10);
-    if (action === 'key-event') simulateToKeyEvent();
-    if (action === 'all-games') simulateAllGames();
     if (action === 'continue-postseason') continuePostseason();
     if (action === 'playin') simulatePlayIn();
     if (action === 'series') simulateSeries();
