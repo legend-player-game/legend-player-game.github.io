@@ -2679,18 +2679,38 @@
     state.season.isSimulating = true;
     state.season.simulationMode = 'compatibility';
     state.season.simulationFallback = fallbackCause ? String(fallbackCause.message || fallbackCause) : null;
-    try {
-      while (state.season.stage === 'regular' && state.season.schedule.some(item => !item.result) && (state.season.completedRounds || 0) < targetRound) {
-        const game = simulateOneGame();
-        if (!game) throw new Error('兼容模式单场结算失败');
+    const runBatch = () => {
+      if (!state.season || state.season.stage !== 'regular' || !state.season.isSimulating) return;
+      let latest = null;
+      try {
+        let simulated = 0;
+        while (simulated < 2 && state.season.schedule.some(item => !item.result) && (state.season.completedRounds || 0) < targetRound) {
+          latest = simulateOneGame();
+          if (!latest) throw new Error('兼容模式单场结算失败');
+          simulated += 1;
+        }
+      } catch (error) {
+        cancelRegularSeasonFrame();
+        state.season.isSimulating = false;
+        state.season.simulationError = String(error?.message || error || '未知错误');
+        renderSeason();
+        saveGame();
+        return;
       }
-      completeRegularSeasonSimulation();
-    } catch (error) {
-      state.season.isSimulating = false;
-      state.season.simulationError = String(error?.message || error || '未知错误');
-      renderSeason();
-      saveGame();
-    }
+      const completed = state.season.completedRounds || (state.season.wins + state.season.losses);
+      updateRegularSeasonAnimation(latest);
+      if (completed > 0 && completed % 10 === 0) saveGame();
+      const targetReached = completed >= targetRound;
+      if (!state.season.schedule.some(item => !item.result) || targetReached || state.season.stage !== 'regular') {
+        completeRegularSeasonSimulation();
+        return;
+      }
+      regularSeasonFrameFallbackTimer = window.setTimeout(() => {
+        regularSeasonFrameFallbackTimer = null;
+        runBatch();
+      }, 72);
+    };
+    runBatch();
   }
 
   function queueRegularSeasonSimulation() {
