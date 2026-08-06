@@ -1719,6 +1719,31 @@ button.attribute-slot:not(:disabled):hover {
   min-width: 0;
 }
 
+.season-rolling-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin: 14px 0;
+}
+
+.season-rolling-grid > div {
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.season-rolling-grid > div:last-child { border-right: 0; }
+.season-rolling-grid span { display: block; color: var(--muted); font-size: 12px; }
+.season-rolling-grid b { display: block; margin-top: 4px; font-size: 18px; }
+.rotation-change-note { margin: -4px 0 14px; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 560px) {
+  .season-rolling-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .season-rolling-grid > div:nth-child(2) { border-right: 0; }
+  .season-rolling-grid > div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+}
+
 .conference-standings {
   margin: 0 0 15px;
   padding: 12px;
@@ -2980,7 +3005,7 @@ button.attribute-slot:not(:disabled):hover {
 
 .season-context-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   overflow: hidden;
   margin-bottom: 12px;
   border: 1px solid var(--line);
@@ -3431,6 +3456,31 @@ button.attribute-slot:not(:disabled):hover {
   background: #fff0b8;
   font-size: 11px;
   font-weight: 900;
+}
+
+.career-identity {
+  margin: 18px 16px 0;
+  padding: 14px 16px;
+  border-left: 5px solid var(--orange);
+  background: #f2efe7;
+}
+
+.career-identity span {
+  color: var(--orange-dark);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.career-identity h2 {
+  margin: 3px 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+}
+
+.career-identity p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .career-documentary {
@@ -4205,7 +4255,8 @@ button.attribute-slot:not(:disabled):hover {
   }
 
   .season-context-grid > div:nth-child(2) { border-right: 0; }
-  .season-context-grid > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .season-context-grid > div:nth-child(4) { border-right: 0; }
+  .season-context-grid > div:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
 
   .injury-strip {
     align-items: flex-start;

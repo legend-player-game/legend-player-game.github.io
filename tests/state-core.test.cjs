@@ -4,23 +4,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const STATE = require('../state-core.js');
 
-test('save migration removes hidden league rating differences', () => {
+test('save loader rejects every previous schema instead of migrating it', () => {
   const migrated = STATE.migrateSave({
-    schemaVersion: 5,
+    schemaVersion: 7,
     screen: 'season',
     career: { league: { players: [{ id: 'p1', ovr: 91, simOvr: 89, sourceOvr: 92 }] } },
     season: { stage: 'regular', isSimulating: true, seriesSimulation: { wins: 2 } }
-  }, 6);
-  assert.equal(migrated.schemaVersion, 6);
-  assert.equal(migrated.career.league.players[0].ovr, 91);
-  assert.equal(migrated.career.league.players[0].simOvr, 91);
-  assert.equal(migrated.season.isSimulating, false);
-  assert.equal(migrated.season.seriesSimulation, null);
+  }, 8);
+  assert.equal(migrated, null);
 });
 
-test('save migration repairs legacy All-NBA award labels and counts', () => {
+test('current save normalization canonicalizes All-NBA award labels and counts', () => {
   const migrated = STATE.migrateSave({
-    schemaVersion: 7,
+    schemaVersion: 8,
     career: {
       awardCounts: { '最有价值球员': 4, '最佳阵容': 2, '我的最佳阵容': 6 },
       history: [
@@ -31,7 +27,7 @@ test('save migration repairs legacy All-NBA award labels and counts', () => {
     season: {
       awards: [{ label: '我的最佳阵容', winner: '最佳阵容一阵', isUser: true }]
     }
-  }, 7);
+  }, 8);
   assert.deepEqual(migrated.career.awardCounts, { '最有价值球员': 4, '最佳阵容': 8 });
   assert.deepEqual(migrated.career.history[0].awards, ['最有价值球员', '最佳阵容']);
   assert.deepEqual(migrated.career.history[1].awards, ['最佳阵容']);
@@ -44,8 +40,8 @@ test('All-NBA display labels always archive under the canonical award key', () =
   assert.equal(STATE.canonicalAwardLabel('最有价值球员'), '最有价值球员');
 });
 
-test('save migration initializes postseason records and voluntary retirement flags', () => {
-  const migrated = STATE.migrateSave({ schemaVersion: 6, career: {}, season: { stage: 'ended' } }, 7);
+test('current save normalization initializes postseason records and voluntary retirement flags', () => {
+  const migrated = STATE.migrateSave({ schemaVersion: 8, career: {}, season: { stage: 'ended' } }, 8);
   assert.deepEqual(migrated.season.postseasonPlayerStats, {});
   assert.equal(migrated.season.finalsMvp, null);
   assert.equal(migrated.career.voluntaryRetirement, false);
@@ -59,14 +55,14 @@ test('save migration initializes postseason records and voluntary retirement fla
   });
 });
 
-test('save migration repairs an MVP season that was stored as All-NBA second team', () => {
+test('current save normalization repairs an MVP season stored as All-NBA second team', () => {
   const migrated = STATE.migrateSave({
-    schemaVersion: 7,
+    schemaVersion: 8,
     season: { awards: [
       { label: '最有价值球员', winner: '我', isUser: true },
       { label: '我的最佳阵容', recordLabel: '最佳阵容', winner: '最佳阵容二阵', detail: '最佳阵容二阵', isUser: true }
     ] }
-  }, 7);
+  }, 8);
   const allNba = migrated.season.awards.find(award => award.recordLabel === '最佳阵容');
   assert.equal(allNba.winner, '最佳阵容一阵');
   assert.equal(allNba.detail, '最佳阵容一阵');
@@ -74,11 +70,12 @@ test('save migration repairs an MVP season that was stored as All-NBA second tea
 
 test('save snapshot is serializable and trims selected player data', () => {
   const snapshot = STATE.createSaveSnapshot({
+    schemaVersion: 8,
     screen: 'build',
     sessionId: 'session-1',
     selectedPlayer: { name: '测试球员', teamId: 'BOS', threePT: 99 },
     attrs: {}
-  }, 6, '2026-07-30T00:00:00.000Z');
+  }, 8, '2026-07-30T00:00:00.000Z');
   assert.deepEqual(snapshot.selectedPlayer, { name: '测试球员', teamId: 'BOS' });
   assert.equal(snapshot.savedAt, '2026-07-30T00:00:00.000Z');
   assert.doesNotThrow(() => JSON.stringify(snapshot));
@@ -87,8 +84,8 @@ test('save snapshot is serializable and trims selected player data', () => {
 test('stored save selection falls back to backup when primary is corrupt', () => {
   const result = STATE.selectStoredSave([
     { source: 'current', value: '{broken' },
-    { source: 'backup', value: JSON.stringify({ screen: 'season', sessionId: 'safe' }) }
-  ], 6);
+    { source: 'backup', value: JSON.stringify({ schemaVersion: 8, screen: 'season', sessionId: 'safe' }) }
+  ], 8);
   assert.equal(result.state.sessionId, 'safe');
   assert.equal(result.source, 'backup');
   assert.equal(result.recovered, true);
@@ -115,6 +112,7 @@ test('award records are idempotent by season number', () => {
 
 test('save compaction does not mutate source and preserves the user career history', () => {
   const source = {
+    schemaVersion: 8,
     candidatePlayers: [{ id: 'candidate-1' }],
     seenCandidatePlayers: ['candidate-1'],
     career: {
@@ -141,7 +139,7 @@ test('save compaction does not mutate source and preserves the user career histo
     }
   };
 
-  const snapshot = STATE.createSaveSnapshot(source, 7, '2026-08-03T00:00:00.000Z');
+  const snapshot = STATE.createSaveSnapshot(source, 8, '2026-08-03T00:00:00.000Z');
 
   assert.equal(source.candidatePlayers.length, 1);
   assert.equal(source.career.league.players.length, 3);
@@ -163,6 +161,7 @@ test('serializedBytes measures UTF-8 content and compaction substantially reduce
     payload: 'x'.repeat(240)
   }));
   const state = {
+    schemaVersion: 8,
     candidatePlayers: Array.from({ length: 50 }, (_, id) => ({ id, payload: 'x'.repeat(500) })),
     seenCandidatePlayers: Array.from({ length: 200 }, (_, id) => `player-${id}`),
     career: {
@@ -179,7 +178,7 @@ test('serializedBytes measures UTF-8 content and compaction substantially reduce
     }
   };
   const before = STATE.serializedBytes(state);
-  const snapshot = STATE.createSaveSnapshot(state, 7);
+  const snapshot = STATE.createSaveSnapshot(state, 8);
   const after = STATE.serializedBytes(snapshot);
 
   assert.ok(after < before * 0.45, `expected compact snapshot below 45%, got ${(after / before * 100).toFixed(1)}%`);

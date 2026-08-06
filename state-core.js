@@ -86,6 +86,7 @@
     delete compact.ageSource;
     delete compact.sourceOvr;
     delete compact.projected;
+    if (compact.currentSeasonStats?.seasonNumber === compact.lastSeason?.seasonNumber) delete compact.currentSeasonStats;
     return compact;
   }
 
@@ -107,14 +108,19 @@
       if (Array.isArray(save.career.recentDepartures)) save.career.recentDepartures = save.career.recentDepartures.slice(-8);
       if (Array.isArray(save.career.tradeCounterpartIds)) save.career.tradeCounterpartIds = save.career.tradeCounterpartIds.slice(-20);
     }
+    if (save.season && save.season.stage !== 'regular') {
+      delete save.season.leagueSchedule;
+      delete save.season.leagueRecords;
+    }
     return save;
   }
 
   function migrateSave(rawSave, targetVersion) {
     if (!rawSave || typeof rawSave !== 'object') return null;
+    if (Number(rawSave.schemaVersion) !== Number(targetVersion)) return null;
     const save = clone(rawSave);
     save.schemaVersion = targetVersion;
-    save.sessionId = save.sessionId || `legacy-${save.eraKey || 'current'}-${save.career?.startYear || 0}`;
+    save.sessionId = save.sessionId || `career-${save.eraKey || 'current'}-${save.career?.startYear || 0}`;
     if (save.season) {
       save.season.isSimulating = false;
       save.season.playInSimulation = null;

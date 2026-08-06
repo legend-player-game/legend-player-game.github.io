@@ -16,6 +16,71 @@ test('seeded random stream is reproducible', () => {
   }
 });
 
+test('league schedule creates 82 games per team and 1230 unique games', () => {
+  const teams = Array.from({ length: 30 }, (_, index) => ({ id: `T${index}` }));
+  const schedule = SIM.generateLeagueSchedule(teams, 20260806);
+  assert.equal(schedule.length, 82);
+  assert.ok(schedule.every(round => round.games.length === 15));
+  const counts = Object.fromEntries(teams.map(team => [team.id, 0]));
+  const ids = new Set();
+  schedule.forEach(round => round.games.forEach(game => {
+    counts[game.home] += 1;
+    counts[game.away] += 1;
+    ids.add(game.id);
+  }));
+  assert.ok(Object.values(counts).every(count => count === 82));
+  assert.equal(ids.size, 1230);
+});
+
+test('detailed game uses one source for score, periods, minutes and win contribution', () => {
+  const keys = ['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'];
+  const roster = (teamId, offset) => Array.from({ length: 15 }, (_, index) => ({
+    id: `${teamId}-${index}`,
+    teamId,
+    name: `${teamId}${index}`,
+    pos: ['PG', 'SG', 'SF', 'PF', 'C'][index % 5],
+    ovr: 90 - index + offset,
+    attrs: Object.fromEntries(keys.map((key, keyIndex) => [key, 88 - index + (keyIndex % 3)]))
+  }));
+  const result = SIM.simulateLeagueGame({
+    homeTeamId: 'HOME', awayTeamId: 'AWAY',
+    homePlayers: roster('HOME', 1), awayPlayers: roster('AWAY', 0),
+    seasonYear: 2026, seed: 42
+  });
+  assert.equal(result.homePlayers.reduce((sum, player) => sum + player.pts, 0), result.homeScore);
+  assert.equal(result.awayPlayers.reduce((sum, player) => sum + player.pts, 0), result.awayScore);
+  assert.equal(result.homePlayers.reduce((sum, player) => sum + player.min, 0), 240);
+  assert.equal(result.awayPlayers.reduce((sum, player) => sum + player.min, 0), 240);
+  assert.equal(result.periods.reduce((sum, period) => sum + period.home, 0), result.homeScore);
+  assert.equal(result.periods.reduce((sum, period) => sum + period.away, 0), result.awayScore);
+  const winners = result.homeWon ? result.homePlayers : result.awayPlayers;
+  assert.ok(Math.abs(winners.reduce((sum, player) => sum + player.winContribution, 0) - 1) < 0.0001);
+});
+
+test('detailed box score supports scoring, passing and rebounding specialists', () => {
+  const keys = ['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'];
+  const base = Object.fromEntries(keys.map(key => [key, 72]));
+  const roster = Array.from({ length: 15 }, (_, index) => ({ id: `role-${index}`, name: `角色${index}`, teamId: 'T', ovr: 82 - index, attrs: { ...base }, shotUsage: 16, creationLoad: 14 }));
+  roster[0] = { ...roster[0], id: 'scorer', ovr: 96, shotUsage: 35, attrs: { ...base, threePT: 97, MID: 96, FIN: 96, HAN: 95, ATH: 94, CLU: 94 } };
+  roster[1] = { ...roster[1], id: 'passer', ovr: 94, shotUsage: 18, creationLoad: 36, attrs: { ...base, PAS: 99, HAN: 97, CLU: 94, MID: 88 } };
+  roster[2] = { ...roster[2], id: 'rebounder', ovr: 91, shotUsage: 15, attrs: { ...base, REB: 99, STR: 96, ATH: 93, IDEF: 94, BLK: 92 } };
+  const box = SIM.generateTeamGameBoxScore(roster, 122, 103, 81).players;
+  assert.ok(box.find(player => player.id === 'scorer').pts >= 28);
+  assert.ok(box.find(player => player.id === 'passer').ast >= 10);
+  assert.ok(box.find(player => player.id === 'rebounder').reb >= 10);
+});
+
+test('rolling coach evaluation moves gradually from projection to real impact', () => {
+  const projected = 84;
+  const early = SIM.calculateRollingCoachEvaluation({ projectedImpact: projected, currentSeasonStats: { games: 5, min: 150, impactTotal: 110, recentImpacts: [22, 22, 22, 22, 22] } });
+  const established = SIM.calculateRollingCoachEvaluation({ projectedImpact: projected, currentSeasonStats: { games: 55, min: 1800, impactTotal: 1210, recentImpacts: Array(10).fill(22) } });
+  const struggling = SIM.calculateRollingCoachEvaluation({ projectedImpact: projected, currentSeasonStats: { games: 55, min: 1800, impactTotal: 220, recentImpacts: Array(10).fill(4) } });
+  assert.ok(early > projected);
+  assert.ok(established > early);
+  assert.ok(struggling < projected);
+  assert.ok(established <= projected + 10);
+});
+
 test('fifteen-player rotation conserves 240 minutes', () => {
   const roster = Array.from({ length: 15 }, (_, index) => ({ id: `p${index}`, ovr: 90 - index, isUser: false }));
   const allocation = SIM.allocateRotation(roster);
@@ -29,7 +94,7 @@ test('short-handed rotation still conserves 240 minutes', () => {
   assert.ok(Object.values(allocation).every(minutes => minutes <= 48));
 });
 
-test('position-aware rotation conserves minutes and reduces opportunity in a crowded role', () => {
+test('rotation minutes follow winning merit without a position scarcity override', () => {
   const balanced = ['PG', 'SG', 'SF', 'PF', 'C'].flatMap((pos, index) => [
     { id: `${pos}-starter`, pos, positions: [pos], ovr: 90 - index },
     { id: `${pos}-backup`, pos, positions: [pos], ovr: 80 - index }
@@ -38,10 +103,9 @@ test('position-aware rotation conserves minutes and reduces opportunity in a cro
     { id: 'pg-extra-1', pos: 'PG', positions: ['PG'], ovr: 87 },
     { id: 'pg-extra-2', pos: 'PG', positions: ['PG'], ovr: 86 }
   ]);
-  const normalMinutes = SIM.allocatePositionAwareRotation(balanced)['PG-backup'];
   const crowdedAllocation = SIM.allocatePositionAwareRotation(crowded);
   assert.equal(SIM.rotationTotal(crowdedAllocation), 240);
-  assert.ok(crowdedAllocation['PG-backup'] < normalMinutes);
+  assert.deepEqual(crowdedAllocation, SIM.allocateRotation(crowded));
 });
 
 test('team records conserve league wins and losses', () => {
@@ -212,7 +276,7 @@ test('computer development uses a bounded TP budget instead of direct OVR growth
   assert.equal(veteran.points, 0);
 });
 
-test('rotation merit lets sustained production soften but not erase an OVR gap', () => {
+test('legacy rotation merit uses sustained production to correct an OVR-only fallback', () => {
   const productive = SIM.calculateRotationMerit({
     ovr: 84, attributeOvr: 84,
     lastSeason: { games: 76, minutes: 34, pts: 27, reb: 6, ast: 8, stl: 1.3, blk: 0.4, tov: 2.7, trueShooting: 62 }
@@ -222,8 +286,64 @@ test('rotation merit lets sustained production soften but not erase an OVR gap',
     ovr: 90, attributeOvr: 90,
     lastSeason: { games: 75, minutes: 31, pts: 10, reb: 3, ast: 2, stl: 0.5, blk: 0.2, tov: 2, trueShooting: 51 }
   });
-  assert.ok(productive > unproven);
-  assert.ok(weakHighRated > productive);
+  assert.ok(productive > 84);
+  assert.ok(productive < unproven);
+  assert.ok(weakHighRated < 90);
+});
+
+test('coaches use realized team win share to correct projected winning impact', () => {
+  const attrs = { threePT: 82, MID: 80, FIN: 84, DNK: 76, HAN: 82, PAS: 80, PDEF: 84, IDEF: 82, BLK: 74, REB: 80, ATH: 84, STR: 80, CLU: 82 };
+  const projected = SIM.calculateRotationMerit({ pos: 'SF', attrs, ovr: 84 });
+  const proven = SIM.calculateRotationMerit({
+    pos: 'SF', attrs, ovr: 84,
+    lastSeason: { games: 78, minutes: 34, contributionShare: 0.2 }
+  });
+  const lowImpact = SIM.calculateRotationMerit({
+    pos: 'SF', attrs, ovr: 84,
+    lastSeason: { games: 78, minutes: 34, contributionShare: 0.08 }
+  });
+  assert.ok(proven > projected);
+  assert.ok(lowImpact < projected);
+});
+
+test('coaches rank players by projected winning impact rather than public overall', () => {
+  const defensiveCenter = {
+    id: 'defensive-center', pos: 'C', positions: ['C'], ovr: 83, attributeOvr: 83,
+    attrs: { threePT: 60, MID: 65, FIN: 72, DNK: 70, HAN: 58, PAS: 65, PDEF: 95, IDEF: 99, BLK: 86, REB: 90, ATH: 90, STR: 90, CLU: 72 }
+  };
+  const balancedStarter = {
+    id: 'balanced-center', pos: 'C', positions: ['C'], ovr: 84, attributeOvr: 84,
+    attrs: Object.fromEntries(['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'].map(key => [key, 84]))
+  };
+  const defenderImpact = SIM.calculateProjectedWinImpact(defensiveCenter);
+  assert.ok(defenderImpact.components.defense >= 92);
+  assert.ok(defenderImpact.components.rebounding >= 90);
+  assert.ok(SIM.calculateRotationMerit(defensiveCenter) > SIM.calculateRotationMerit(balancedStarter) + 7);
+});
+
+test('supported specialist routes earn winning impact while an isolated 99 does not', () => {
+  const shooter = SIM.calculateProjectedWinImpact({ pos: 'SG', attrs: { threePT: 99, MID: 92, CLU: 90, HAN: 84, ATH: 82, FIN: 72, DNK: 55, PAS: 72, PDEF: 65, IDEF: 50, BLK: 45, REB: 55, STR: 55 } });
+  const creator = SIM.calculateProjectedWinImpact({ pos: 'PG', attrs: { PAS: 99, HAN: 96, CLU: 92, MID: 86, ATH: 85, threePT: 82, FIN: 78, DNK: 68, PDEF: 70, IDEF: 55, BLK: 45, REB: 58, STR: 60 } });
+  const finisher = SIM.calculateProjectedWinImpact({ pos: 'SG', attrs: { FIN: 98, DNK: 97, ATH: 96, STR: 90, HAN: 86, threePT: 68, MID: 72, PAS: 70, PDEF: 72, IDEF: 68, BLK: 60, REB: 72, CLU: 82 } });
+  const isolated = SIM.calculateProjectedWinImpact({ pos: 'SG', attrs: { threePT: 99, MID: 50, CLU: 50, HAN: 50, ATH: 50, FIN: 50, DNK: 50, PAS: 50, PDEF: 50, IDEF: 50, BLK: 50, REB: 50, STR: 50 } });
+  assert.ok(shooter.rating >= 82);
+  assert.ok(creator.rating >= 90);
+  assert.ok(finisher.rating >= 86);
+  assert.ok(isolated.rating < 60);
+});
+
+test('observed defensive production sustains rotation merit after a full season', () => {
+  const attrs = { threePT: 60, MID: 65, FIN: 72, DNK: 70, HAN: 58, PAS: 65, PDEF: 95, IDEF: 99, BLK: 90, REB: 92, ATH: 90, STR: 90, CLU: 72 };
+  const defender = SIM.calculateRotationMerit({
+    pos: 'C', ovr: 83, attributeOvr: 83, attrs, defense: 95,
+    lastSeason: { games: 76, minutes: 34, pts: 12, reb: 12, ast: 3, stl: 1.5, blk: 2.5, tov: 1.6, trueShooting: 59, defense: 95, defensiveLoad: 34 }
+  });
+  const emptyScorer = SIM.calculateRotationMerit({
+    pos: 'SG', ovr: 87, attributeOvr: 87,
+    attrs: { threePT: 75, MID: 74, FIN: 76, DNK: 70, HAN: 72, PAS: 68, PDEF: 58, IDEF: 50, BLK: 45, REB: 52, ATH: 72, STR: 58, CLU: 68 },
+    lastSeason: { games: 75, minutes: 31, pts: 10, reb: 3, ast: 2, stl: 0.5, blk: 0.2, tov: 2, trueShooting: 51, defense: 58, defensiveLoad: 12 }
+  });
+  assert.ok(defender > emptyScorer + 20);
 });
 
 test('active veterans always receive training points while youth keeps an efficiency advantage', () => {
@@ -400,12 +520,12 @@ test('elite tail makes 99 meaningfully stronger than 97 in the matching role', (
   assert.ok(elite.ast > nearElite.ast * 1.08);
 });
 
-test('modern elite usage produces high but bounded shot volume', () => {
+test('modern elite scoring produces high but bounded shot volume', () => {
   const attrs = Object.fromEntries(['threePT', 'MID', 'FIN', 'DNK', 'HAN', 'PAS', 'PDEF', 'IDEF', 'BLK', 'REB', 'ATH', 'STR', 'CLU'].map(key => [key, 97]));
   attrs.threePT = 99;
   attrs.HAN = 99;
   const profile = SIM.calculateStatProfile({ attrs, position: 'PG', minutes: 36, usage: 34, ovr: 97, role: 'creator', pace: 1.04 });
-  assert.ok(profile.fga >= 20 && profile.fga <= 25, `unexpected elite shot volume: ${profile.fga}`);
+  assert.ok(profile.fga >= 25 && profile.fga <= 31, `unexpected elite shot volume: ${profile.fga}`);
 });
 
 test('point big with generational passing and rebounding can approach a triple-double', () => {
@@ -566,20 +686,65 @@ test('MVP winner is always All-NBA first team and other finalists cannot fall be
   assert.equal(selections.length, 15);
 });
 
-test('generational playmaking unlocks higher offensive involvement and team impact', () => {
-  const elite = SIM.calculateOffensiveUsage({
-    ovr: 97, teamCoreOvr: 90, scoring: 92, playmaking: 99, minutes: 36, rank: 1, archetypeBonus: 3.5
+test('generational playmaking raises creation load without manufacturing shot usage', () => {
+  const elite = SIM.calculatePlayerLoadProfile({
+    ovr: 88, teamCoreOvr: 90, scoring: 76, playmaking: 99, minutes: 36, rank: 1, archetypeBonus: 0
   });
-  const ordinary = SIM.calculateOffensiveUsage({
-    ovr: 97, teamCoreOvr: 90, scoring: 92, playmaking: 86, minutes: 36, rank: 1, archetypeBonus: 3.5
+  const scorer = SIM.calculatePlayerLoadProfile({
+    ovr: 88, teamCoreOvr: 90, scoring: 94, playmaking: 82, minutes: 36, rank: 1, archetypeBonus: 2
   });
-  assert.ok(elite.usage >= 39, `unexpected elite usage: ${elite.usage}`);
-  assert.ok(elite.usage > ordinary.usage + 5);
-  assert.ok(elite.ceiling > 40);
+  assert.ok(elite.creationLoad > scorer.creationLoad + 4);
+  assert.ok(elite.shotUsage < scorer.shotUsage);
   const impact = SIM.calculatePlaymakingImpact([
-    { minutes: 36, usage: elite.usage, attrs: { PAS: 99, HAN: 99 } }
+    { minutes: 36, usage: elite.shotUsage, creationLoad: elite.creationLoad, attrs: { PAS: 99, HAN: 99 } }
   ]);
-  assert.ok(impact >= 1.4);
+  assert.ok(impact >= 1.3);
+});
+
+test('career identity recognizes non-scoring specialist routes by position and era', () => {
+  const career = {
+    position: 'C',
+    startYear: 2003,
+    history: Array.from({ length: 8 }, (_, index) => ({
+      averages: { pts: 14 + index * 0.2, reb: 17.8, ast: 4.2, stl: 0.9, blk: 4.1 },
+      attrs: { PDEF: 82, IDEF: 98 }
+    }))
+  };
+  const identity = SIM.calculateCareerIdentity(career);
+  assert.equal(identity.primary.label, '护框防守核心');
+  assert.ok(identity.routes.find(route => route.key === 'rebounding').index >= 100);
+});
+
+test('both teams share one dynamic pace and pressure creates turnovers', () => {
+  const fast = { tempo: 104, transition: 75, halfCourt: 58, pressure: 96, rimDefense: 78, rebounding: 78 };
+  const slow = { tempo: 92, transition: 38, halfCourt: 72, pressure: 62, rimDefense: 90, rebounding: 84 };
+  const environment = SIM.calculateGameEnvironment(fast, slow, 2026, 0);
+  assert.ok(Math.abs(environment.ownPossessions - environment.opponentPossessions) <= 2);
+  assert.ok(environment.opponentTurnoverRate > environment.ownTurnoverRate);
+  assert.ok(environment.possessions > 96 && environment.possessions < 101);
+});
+
+test('elite defense materially lowers opponent efficiency', () => {
+  const offense = { offense: 116, halfCourt: 65, transition: 60 };
+  const weak = { defense: 116, pressure: 60, rimDefense: 60 };
+  const elite = { defense: 101, pressure: 95, rimDefense: 95 };
+  const environment = { turnoverRate: 13, transition: 55, secondChance: 22 };
+  const weakResult = SIM.calculateTeamEfficiency(offense, weak, environment);
+  const eliteResult = SIM.calculateTeamEfficiency(offense, elite, environment);
+  assert.ok(weakResult.rating > eliteResult.rating + 8);
+});
+
+test('defensive specialists can earn meaningful win contribution', () => {
+  const defender = SIM.calculatePlayerValueBreakdown({ games: 78, minutes: 36, pts: 15, reb: 8, ast: 4, stl: 3.1, blk: 2.2, tov: 1.8, trueShooting: 59, defense: 98, defensiveLoad: 36 });
+  const emptyScorer = SIM.calculatePlayerValueBreakdown({ games: 78, minutes: 36, pts: 24, reb: 4, ast: 3, stl: 0.5, blk: 0.2, tov: 3.8, trueShooting: 51, defense: 58, defensiveLoad: 10 });
+  assert.ok(defender.total > emptyScorer.total);
+  assert.ok(defender.defense > defender.offense * 0.45);
+});
+
+test('inefficient high load does not outgrow an efficient balanced role', () => {
+  const inefficient = SIM.calculateDevelopmentProfile({ potential: 92, age: 22, minutes: 35, shotUsage: 38, creationLoad: 34, defensiveLoad: 10, games: 78, trueShooting: 49, tov: 5.2, defense: 55 });
+  const balanced = SIM.calculateDevelopmentProfile({ potential: 92, age: 22, minutes: 31, shotUsage: 25, creationLoad: 25, defensiveLoad: 24, games: 78, trueShooting: 61, tov: 2.3, defense: 82 });
+  assert.ok(balanced.opportunity > inefficient.opportunity);
 });
 
 test('franchise icon retention survives late-career market decline', () => {
@@ -877,9 +1042,9 @@ test('411 production cannot unlock the historical top ten without core titles', 
   assert.equal(legacy.tier.key, 'top15');
 });
 
-test('historical unique tier requires seven core titles and seven Finals MVPs', () => {
+test('seven core titles and seven Finals MVPs clear the post-Jordan unique index', () => {
   const legacy = SIM.calculateCareerLegacy(legacyCareer({ core: 7, championships: 7, fmvp: 7, mvp: 3 }));
-  assert.equal(legacy.hardScore, 155);
+  assert.ok(legacy.hardScore >= 170);
   assert.equal(legacy.tier.key, 'unique');
   assert.equal(legacy.critique, null);
 });
@@ -894,7 +1059,7 @@ test('historical top three accepts different MVP and Finals MVP mixes after the 
 test('ordinary championship rings do not enter the hard metric', () => {
   const legacy = SIM.calculateCareerLegacy(legacyCareer({ core: 0, championships: 6, fmvp: 0, mvp: 2 }));
   assert.equal(legacy.coreChampionships, 0);
-  assert.equal(legacy.hardScore, 10);
+  assert.equal(legacy.hardScore, 16);
   assert.notEqual(legacy.tier.key, 'top10');
 });
 
@@ -909,12 +1074,19 @@ test('a championship records no more than two qualified cores', () => {
   assert.deepEqual(cores.map(player => player.coreRole), ['FMVP', '季后赛第二贡献者']);
 });
 
-test('active move penalties and rank caps begin with the second departure', () => {
+test('active move penalties begin with the second departure without an absolute rank cap', () => {
   const moves = count => Array.from({ length: count }, (_, index) => ({ type: '自由签约', fromTeamId: `T${index}`, teamId: `T${index + 1}`, season: index + 2, years: 4 }));
   assert.equal(SIM.calculateCareerMovementPenalty({ transactions: moves(1) }).penalty, 0);
   assert.equal(SIM.calculateCareerMovementPenalty({ transactions: moves(2) }).penalty, 1.5);
-  assert.deepEqual([3, 4, 5].map(count => SIM.calculateCareerMovementPenalty({ transactions: moves(count) }).capRank), [10, 15, 30]);
+  assert.deepEqual([3, 4, 5].map(count => SIM.calculateCareerMovementPenalty({ transactions: moves(count) }).capRank), [null, null, null]);
   assert.deepEqual([3, 4, 5].map(count => SIM.calculateCareerMovementPenalty({ transactions: moves(count) }).penalty), [4, 7.5, 11.5]);
+});
+
+test('overwhelming championship dominance survives frequent voluntary moves', () => {
+  const transactions = Array.from({ length: 8 }, (_, index) => ({ type: '自由签约', fromTeamId: `T${index}`, teamId: `T${index + 1}`, season: index + 2, years: 2 }));
+  const legacy = SIM.calculateCareerLegacy(legacyCareer({ core: 15, championships: 15, fmvp: 15, mvp: 6, transactions }));
+  assert.ok(['unique', 'top3'].includes(legacy.tier.key));
+  assert.equal(legacy.movement.capRank, null);
 });
 
 test('involuntary trades never count as active departures', () => {
