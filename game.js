@@ -67,7 +67,6 @@
   const simulationTimers = new Set();
   let regularSeasonAnimationFrame = null;
   let regularSeasonFrameFallbackTimer = null;
-  let regularSeasonStartTimer = null;
   let debugCareerMode = false;
   let lastStoredSource = null;
   let lastStoredRecovered = false;
@@ -377,16 +376,16 @@
   function stopSimulationTimers() {
     simulationTimers.forEach(timer => window.clearInterval(timer));
     simulationTimers.clear();
-    if (regularSeasonStartTimer != null) {
-      window.clearTimeout(regularSeasonStartTimer);
-      regularSeasonStartTimer = null;
-    }
     cancelRegularSeasonFrame();
   }
 
   function localDebugParam(name) {
     if (!['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)) return null;
     return new URLSearchParams(window.location.search).get(name);
+  }
+
+  function isWeChatBrowser() {
+    return /MicroMessenger/i.test(window.navigator?.userAgent || '') || localDebugParam('wechatTest') === '1';
   }
 
   function cloneTemplate(id) {
@@ -2613,12 +2612,19 @@
       if (!state.season || state.season.stage !== 'regular' || !state.season.isSimulating) {
         return;
       }
-      const frameStart = performance.now();
       let latest = null;
-      let simulated = 0;
-      while (performance.now() - frameStart < 8 && simulated < 3 && state.season.schedule.some(item => !item.result) && (state.season.completedRounds || 0) < targetRound) {
-        latest = simulateOneGame();
-        simulated += 1;
+      try {
+        const frameStart = performance.now();
+        let simulated = 0;
+        while (performance.now() - frameStart < 8 && simulated < 3 && state.season.schedule.some(item => !item.result) && (state.season.completedRounds || 0) < targetRound) {
+          latest = simulateOneGame();
+          if (!latest) throw new Error('常规赛单场结算失败');
+          simulated += 1;
+        }
+      } catch (error) {
+        cancelRegularSeasonFrame();
+        runRegularSeasonCompatibility(targetRound, error);
+        return;
       }
       const completed = state.season.completedRounds || (state.season.wins + state.season.losses);
       if (completed - lastRenderedRound >= 4 || !state.season.schedule.some(item => !item.result)) {
@@ -2628,10 +2634,7 @@
       if (completed > 0 && completed % 10 === 0) saveGame();
       const targetReached = completed >= targetRound;
       if (!state.season.schedule.some(item => !item.result) || targetReached) {
-        state.season.isSimulating = false;
-        if (!state.season.schedule.some(item => !item.result)) playTone(720, 0.12);
-        renderSeason();
-        saveGame();
+        completeRegularSeasonSimulation();
         return;
       }
       scheduleRegularSeasonFrame(runFrame);
@@ -2662,13 +2665,39 @@
     regularSeasonFrameFallbackTimer = window.setTimeout(runOnce, 32);
   }
 
+  function completeRegularSeasonSimulation() {
+    state.season.isSimulating = false;
+    state.season.simulationError = null;
+    if (!state.season.schedule.some(item => !item.result)) playTone(720, 0.12);
+    renderSeason();
+    saveGame();
+  }
+
+  function runRegularSeasonCompatibility(targetRound = 82, fallbackCause = null) {
+    if (!state.season || state.season.stage !== 'regular') return;
+    cancelRegularSeasonFrame();
+    state.season.isSimulating = true;
+    state.season.simulationMode = 'compatibility';
+    state.season.simulationFallback = fallbackCause ? String(fallbackCause.message || fallbackCause) : null;
+    try {
+      while (state.season.stage === 'regular' && state.season.schedule.some(item => !item.result) && (state.season.completedRounds || 0) < targetRound) {
+        const game = simulateOneGame();
+        if (!game) throw new Error('兼容模式单场结算失败');
+      }
+      completeRegularSeasonSimulation();
+    } catch (error) {
+      state.season.isSimulating = false;
+      state.season.simulationError = String(error?.message || error || '未知错误');
+      renderSeason();
+      saveGame();
+    }
+  }
+
   function queueRegularSeasonSimulation() {
-    if (regularSeasonStartTimer != null || regularSeasonAnimationFrame != null || regularSeasonFrameFallbackTimer != null) return;
-    regularSeasonStartTimer = window.setTimeout(() => {
-      regularSeasonStartTimer = null;
-      if (state.screen !== 'season' || state.season?.stage !== 'regular' || !state.season.schedule.some(game => !game.result)) return;
-      runRegularSeasonAnimation(82);
-    }, 600);
+    if (regularSeasonAnimationFrame != null || regularSeasonFrameFallbackTimer != null) return;
+    if (state.screen !== 'season' || state.season?.stage !== 'regular' || !state.season.schedule.some(game => !game.result)) return;
+    if (isWeChatBrowser()) runRegularSeasonCompatibility(82);
+    else runRegularSeasonAnimation(82);
   }
 
   function updateRegularSeasonAnimation(game) {
@@ -4143,8 +4172,8 @@
       </div>`;
 
     if (season.stage === 'regular') {
-      season.isSimulating = true;
-      content += regularSeasonSimulationHTML(completed);
+      season.isSimulating = !season.simulationError;
+      content += season.simulationError ? regularSeasonSimulationErrorHTML() : regularSeasonSimulationHTML(completed);
     }
     if (season.stage === 'awards') content += seasonAwardsHTML();
     if (season.stage === 'playin') content += playInHTML();
@@ -4152,7 +4181,7 @@
     if (season.stage === 'ended') content += endedSeasonHTML();
     if (season.stage === 'champion') content += championHTML(team);
     container.innerHTML = content;
-    if (season.stage === 'regular') queueRegularSeasonSimulation();
+    if (season.stage === 'regular' && !season.simulationError) queueRegularSeasonSimulation();
   }
 
   function careerHistoryRows() {
@@ -4489,6 +4518,14 @@
         ${conferenceStandingsHTML()}
         ${debugLeagueAuditHTML()}
         <button class="primary-btn" type="button" data-action="continue-postseason">${season.postSeasonStage === 'playoffs' ? '进入季后赛' : (season.postSeasonStage === 'playin' ? '进入附加赛' : '查看赛季总结')}</button>
+      </section>`;
+  }
+
+  function regularSeasonSimulationErrorHTML() {
+    return `
+      <section class="season-panel simulation-panel">
+        <div class="simulation-heading"><div><span class="live-dot"></span><b>常规赛模拟异常</b></div><strong>${state.season.completedRounds || 0} / 82</strong></div>
+        <div class="sim-latest"><span>当前浏览器未能完成赛季计算，请重新打开页面继续。</span></div>
       </section>`;
   }
 
