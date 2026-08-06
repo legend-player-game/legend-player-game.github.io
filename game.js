@@ -66,6 +66,7 @@
   let spinTimer = null;
   const simulationTimers = new Set();
   let regularSeasonAnimationFrame = null;
+  let regularSeasonFrameFallbackTimer = null;
   let regularSeasonStartTimer = null;
   let debugCareerMode = false;
   let lastStoredSource = null;
@@ -380,10 +381,7 @@
       window.clearTimeout(regularSeasonStartTimer);
       regularSeasonStartTimer = null;
     }
-    if (regularSeasonAnimationFrame != null) {
-      window.cancelAnimationFrame(regularSeasonAnimationFrame);
-      regularSeasonAnimationFrame = null;
-    }
+    cancelRegularSeasonFrame();
   }
 
   function localDebugParam(name) {
@@ -2613,7 +2611,6 @@
     let lastRenderedRound = state.season.completedRounds || 0;
     const runFrame = () => {
       if (!state.season || state.season.stage !== 'regular' || !state.season.isSimulating) {
-        regularSeasonAnimationFrame = null;
         return;
       }
       const frameStart = performance.now();
@@ -2631,20 +2628,42 @@
       if (completed > 0 && completed % 10 === 0) saveGame();
       const targetReached = completed >= targetRound;
       if (!state.season.schedule.some(item => !item.result) || targetReached) {
-        regularSeasonAnimationFrame = null;
         state.season.isSimulating = false;
         if (!state.season.schedule.some(item => !item.result)) playTone(720, 0.12);
         renderSeason();
         saveGame();
         return;
       }
-      regularSeasonAnimationFrame = window.requestAnimationFrame(runFrame);
+      scheduleRegularSeasonFrame(runFrame);
     };
-    regularSeasonAnimationFrame = window.requestAnimationFrame(runFrame);
+    scheduleRegularSeasonFrame(runFrame);
+  }
+
+  function cancelRegularSeasonFrame() {
+    if (regularSeasonAnimationFrame != null && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(regularSeasonAnimationFrame);
+    }
+    if (regularSeasonFrameFallbackTimer != null) window.clearTimeout(regularSeasonFrameFallbackTimer);
+    regularSeasonAnimationFrame = null;
+    regularSeasonFrameFallbackTimer = null;
+  }
+
+  function scheduleRegularSeasonFrame(callback) {
+    let settled = false;
+    const runOnce = () => {
+      if (settled) return;
+      settled = true;
+      cancelRegularSeasonFrame();
+      callback();
+    };
+    if (typeof window.requestAnimationFrame === 'function' && localDebugParam('disableRaf') !== '1') {
+      regularSeasonAnimationFrame = window.requestAnimationFrame(runOnce);
+    }
+    regularSeasonFrameFallbackTimer = window.setTimeout(runOnce, 32);
   }
 
   function queueRegularSeasonSimulation() {
-    if (regularSeasonStartTimer != null || regularSeasonAnimationFrame != null) return;
+    if (regularSeasonStartTimer != null || regularSeasonAnimationFrame != null || regularSeasonFrameFallbackTimer != null) return;
     regularSeasonStartTimer = window.setTimeout(() => {
       regularSeasonStartTimer = null;
       if (state.screen !== 'season' || state.season?.stage !== 'regular' || !state.season.schedule.some(game => !game.result)) return;
